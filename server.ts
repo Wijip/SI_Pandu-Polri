@@ -143,14 +143,16 @@ export const pool = {
 };
 
 const safeAlterQuery = async (sql: string, params: any[] = []) => {
+  if (!dbConnected || !mysqlPool) return null;
   try {
-    return await pool.query(sql, params);
+    const [rows, fields] = await mysqlPool.query(sql, params);
+    return [rows, fields];
   } catch (err: any) {
     if (err.code === 'ER_DUP_KEYNAME' || err.errno === 1061 || 
         err.code === 'ER_DUP_FIELDNAME' || err.errno === 1060) {
       return null;
     }
-    console.error(`Query failed:`, err);
+    console.error(`Safe Alter Query failed:`, err);
     throw err;
   }
 };
