@@ -1,0 +1,8 @@
+{
+  "name": "Skripsi Sistem Manajemen Reset Password - Polda Jatim",
+  "description": "A modern, intuitive, and responsive React-based admin panel for password reset management and personnel data administration, featuring real-time statistics and branding synchronization.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
