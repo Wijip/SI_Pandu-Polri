@@ -18,6 +18,12 @@ const Login: React.FC<LoginProps> = ({ onLogin, addLog, siteSettings, currentUse
   const [redirectToDashboard, setRedirectToDashboard] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
+  // MFA States
+  const [showMfaForm, setShowMfaForm] = useState(false);
+  const [mfaCode, setMfaCode] = useState('');
+  const [userIdentifier, setUserIdentifier] = useState('');
+  const [mfaMessage, setMfaMessage] = useState('');
+
   // Redirect if already logged in
   if (currentUser || redirectToDashboard) return <Navigate to="/" replace />;
 
@@ -36,13 +42,48 @@ const Login: React.FC<LoginProps> = ({ onLogin, addLog, siteSettings, currentUse
       
       const data = await res.json();
       
-          if (data.success) {
-            onLogin(data.user);
-            if (addLog) addLog('Login', `Pengguna ${data.user.nama} berhasil masuk ke sistem`);
-            setRedirectToDashboard(true);
-          } else {
-            setError(data.message || 'Akses ditolak. Email atau kata sandi tidak valid.');
-          }
+      if (data.success && data.mfa_required) {
+        // Show MFA Form instead of logging in directly
+        setUserIdentifier(data.identifier);
+        setMfaMessage(data.message);
+        setShowMfaForm(true);
+      } else if (data.success) {
+        // Fallback if MFA is somehow bypassed by backend
+        onLogin(data.user);
+        if (addLog) addLog('Login', `Pengguna ${data.user.nama} berhasil masuk ke sistem`);
+        setRedirectToDashboard(true);
+      } else {
+        setError(data.message || 'Akses ditolak. Email atau kata sandi tidak valid.');
+      }
+    } catch (err) {
+      setError('Terjadi kesalahan koneksi ke server.');
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const handleVerifyMfa = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsLoading(true);
+    setError('');
+
+    try {
+      const res = await fetch('/api/login/verify-mfa', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ identifier: userIdentifier, code: mfaCode })
+      });
+      
+      const data = await res.json();
+      
+      if (data.success) {
+        onLogin(data.user);
+        if (addLog) addLog('Login', `Pengguna ${data.user.nama} berhasil masuk ke sistem dengan MFA`);
+        setRedirectToDashboard(true);
+      } else {
+        setError(data.message || 'Kode OTP tidak valid atau sudah kadaluarsa.');
+      }
     } catch (err) {
       setError('Terjadi kesalahan koneksi ke server.');
     } finally {
@@ -127,77 +168,134 @@ const Login: React.FC<LoginProps> = ({ onLogin, addLog, siteSettings, currentUse
           </div>
 
           <div className="text-center md:text-left">
-            <h2 className="text-3xl md:text-4xl font-black text-white md:text-slate-900 mb-3 md:mb-4 tracking-tight">Login Panel</h2>
+            <h2 className="text-3xl md:text-4xl font-black text-white md:text-slate-900 mb-3 md:mb-4 tracking-tight">
+              {showMfaForm ? 'Verifikasi Keamanan' : 'Login Panel'}
+            </h2>
             <p className="text-slate-200 md:text-slate-500 text-sm font-semibold leading-relaxed">
-              Selamat datang kembali. Silakan masukkan kredensial akun Anda untuk mengakses sistem administrasi.
+              {showMfaForm 
+                ? mfaMessage || 'Silakan masukkan kode OTP yang telah dikirim ke email dinas Anda.' 
+                : 'Selamat datang kembali. Silakan masukkan kredensial akun Anda untuk mengakses sistem administrasi.'}
             </p>
           </div>
 
-          <form onSubmit={handleSubmit} className="space-y-6 md:space-y-8">
-            <div className="space-y-5 md:space-y-6">
-              <div className="space-y-2">
-                <label className="text-xs font-black text-slate-300 md:text-slate-400 uppercase tracking-widest ml-1">Email Personel</label>
-                <div className="relative group">
-                  <input 
-                    type="email" 
-                    className="w-full px-6 py-4 rounded-2xl border border-white/20 md:border-slate-100 bg-white/10 md:bg-slate-50/50 focus:bg-white/20 md:focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 font-bold text-white md:text-slate-700 placeholder:text-slate-400 md:placeholder:text-slate-300 transition-all pr-14"
-                    placeholder="Masukkan Email Dinas"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    required
-                  />
-                  <span className="material-symbols-outlined absolute right-5 top-1/2 -translate-y-1/2 text-slate-200 md:text-slate-300 group-focus-within:text-blue-500 transition-colors">mail</span>
+          {!showMfaForm ? (
+            <form onSubmit={handleSubmit} className="space-y-6 md:space-y-8">
+              <div className="space-y-5 md:space-y-6">
+                <div className="space-y-2">
+                  <label className="text-xs font-black text-slate-300 md:text-slate-400 uppercase tracking-widest ml-1">Email Personel</label>
+                  <div className="relative group">
+                    <input 
+                      type="email" 
+                      className="w-full px-6 py-4 rounded-2xl border border-white/20 md:border-slate-100 bg-white/10 md:bg-slate-50/50 focus:bg-white/20 md:focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 font-bold text-white md:text-slate-700 placeholder:text-slate-400 md:placeholder:text-slate-300 transition-all pr-14"
+                      placeholder="Masukkan Email Dinas"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      required
+                    />
+                    <span className="material-symbols-outlined absolute right-5 top-1/2 -translate-y-1/2 text-slate-200 md:text-slate-300 group-focus-within:text-blue-500 transition-colors">mail</span>
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center px-1">
+                    <label className="text-xs font-black text-slate-300 md:text-slate-400 uppercase tracking-widest">Kata Sandi</label>
+                  </div>
+                  <div className="relative group">
+                    <input 
+                      type={showPassword ? "text" : "password"} 
+                      className="w-full px-6 py-4 rounded-2xl border border-white/20 md:border-slate-100 bg-white/10 md:bg-slate-50/50 focus:bg-white/20 md:focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 font-bold text-white md:text-slate-700 placeholder:text-slate-400 md:placeholder:text-slate-300 transition-all pr-14"
+                      placeholder="••••••••"
+                      value={password}
+                      onChange={(e) => setPassword(e.target.value)}
+                      required
+                    />
+                    <button 
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="material-symbols-outlined absolute right-5 top-1/2 -translate-y-1/2 text-slate-200 md:text-slate-300 hover:text-slate-600 transition-colors"
+                    >
+                      {showPassword ? 'visibility_off' : 'visibility'}
+                    </button>
+                  </div>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <div className="flex justify-between items-center px-1">
-                  <label className="text-xs font-black text-slate-300 md:text-slate-400 uppercase tracking-widest">Kata Sandi</label>
+              {error && (
+                <div className="text-[11px] font-bold text-rose-400 md:text-rose-600 bg-rose-500/10 md:bg-rose-50 p-4 rounded-2xl border border-rose-500/20 md:border-rose-100 flex items-center gap-3 animate-pulse">
+                  <span className="material-symbols-outlined text-lg">warning</span>
+                  {error}
                 </div>
-                <div className="relative group">
-                  <input 
-                    type={showPassword ? "text" : "password"} 
-                    className="w-full px-6 py-4 rounded-2xl border border-white/20 md:border-slate-100 bg-white/10 md:bg-slate-50/50 focus:bg-white/20 md:focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 font-bold text-white md:text-slate-700 placeholder:text-slate-400 md:placeholder:text-slate-300 transition-all pr-14"
-                    placeholder="••••••••"
-                    value={password}
-                    onChange={(e) => setPassword(e.target.value)}
-                    required
-                  />
-                  <button 
-                    type="button"
-                    onClick={() => setShowPassword(!showPassword)}
-                    className="material-symbols-outlined absolute right-5 top-1/2 -translate-y-1/2 text-slate-200 md:text-slate-300 hover:text-slate-600 transition-colors"
-                  >
-                    {showPassword ? 'visibility_off' : 'visibility'}
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            {error && (
-              <div className="text-[11px] font-bold text-rose-400 md:text-rose-600 bg-rose-500/10 md:bg-rose-50 p-4 rounded-2xl border border-rose-500/20 md:border-rose-100 flex items-center gap-3 animate-pulse">
-                <span className="material-symbols-outlined text-lg">warning</span>
-                {error}
-              </div>
-            )}
-
-            <button 
-              type="submit"
-              disabled={isLoading}
-              className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest text-white shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.97] ${
-                isLoading ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-900/20 hover:shadow-blue-900/40 hover:-translate-y-0.5'
-              }`}
-            >
-              {isLoading ? (
-                <div className="w-5 h-5 border-[3px] border-white/30 border-t-white rounded-full animate-spin"></div>
-              ) : (
-                <>
-                  Masuk Ke Dashboard
-                  <span className="material-symbols-outlined text-xl">arrow_forward</span>
-                </>
               )}
-            </button>
-          </form>
+
+              <button 
+                type="submit"
+                disabled={isLoading}
+                className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest text-white shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.97] ${
+                  isLoading ? 'bg-blue-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-900/20 hover:shadow-blue-900/40 hover:-translate-y-0.5'
+                }`}
+              >
+                {isLoading ? (
+                  <div className="w-5 h-5 border-[3px] border-white/30 border-t-white rounded-full animate-spin"></div>
+                ) : (
+                  <>
+                    Proses Login
+                    <span className="material-symbols-outlined text-xl">arrow_forward</span>
+                  </>
+                )}
+              </button>
+            </form>
+          ) : (
+            <form onSubmit={handleVerifyMfa} className="space-y-6 md:space-y-8">
+              <div className="space-y-2">
+                <label className="text-xs font-black text-slate-300 md:text-slate-400 uppercase tracking-widest ml-1">Kode OTP (6 Digit)</label>
+                <div className="relative group">
+                  <input 
+                    type="text" 
+                    maxLength={6}
+                    className="w-full px-6 py-4 text-center tracking-[0.5em] text-2xl rounded-2xl border border-white/20 md:border-slate-100 bg-white/10 md:bg-slate-50/50 focus:bg-white/20 md:focus:bg-white focus:border-blue-500 focus:ring-4 focus:ring-blue-500/5 font-black text-white md:text-slate-700 placeholder:text-slate-400/50 md:placeholder:text-slate-300/50 transition-all"
+                    placeholder="------"
+                    value={mfaCode}
+                    onChange={(e) => setMfaCode(e.target.value.replace(/\D/g, ''))}
+                    required
+                  />
+                </div>
+              </div>
+
+              {error && (
+                <div className="text-[11px] font-bold text-rose-400 md:text-rose-600 bg-rose-500/10 md:bg-rose-50 p-4 rounded-2xl border border-rose-500/20 md:border-rose-100 flex items-center gap-3 animate-pulse">
+                  <span className="material-symbols-outlined text-lg">warning</span>
+                  {error}
+                </div>
+              )}
+
+              <div className="flex flex-col gap-3">
+                <button 
+                  type="submit"
+                  disabled={isLoading || mfaCode.length !== 6}
+                  className={`w-full py-5 rounded-2xl font-black text-sm uppercase tracking-widest text-white shadow-2xl flex items-center justify-center gap-4 transition-all active:scale-[0.97] ${
+                    (isLoading || mfaCode.length !== 6) ? 'bg-blue-400 cursor-not-allowed' : 'bg-emerald-600 hover:bg-emerald-700 shadow-emerald-900/20 hover:shadow-emerald-900/40 hover:-translate-y-0.5'
+                  }`}
+                >
+                  {isLoading ? (
+                    <div className="w-5 h-5 border-[3px] border-white/30 border-t-white rounded-full animate-spin"></div>
+                  ) : (
+                    <>
+                      Verifikasi & Masuk
+                      <span className="material-symbols-outlined text-xl">verified_user</span>
+                    </>
+                  )}
+                </button>
+                
+                <button 
+                  type="button"
+                  onClick={() => setShowMfaForm(false)}
+                  className="text-xs font-bold text-slate-400 hover:text-slate-600 dark:text-slate-400 dark:hover:text-slate-300 uppercase tracking-wider py-2"
+                >
+                  Batal & Kembali
+                </button>
+              </div>
+            </form>
+          )}
 
           <div className="pt-2 md:pt-4">
              <div className="p-5 bg-white/5 md:bg-slate-50 rounded-[2rem] border border-white/10 md:border-slate-100">

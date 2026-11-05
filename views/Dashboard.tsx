@@ -1,5 +1,5 @@
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { Link } from 'react-router-dom';
 import { motion } from 'motion/react';
 import { 
@@ -27,8 +27,59 @@ const Dashboard: React.FC<DashboardProps> = ({ requests, personnel, currentUser,
   const isDarkMode = siteSettings.darkMode;
   const [chartRange, setChartRange] = useState<'7' | '30'>('7');
 
+  const [liveStats, setLiveStats] = useState<{
+    requests: {
+      total: number;
+      pending: number;
+      processing: number;
+      completed: number;
+      rejected: number;
+      urgent: number;
+      active: number;
+    };
+    personnel: {
+      total: number;
+    };
+    chart7d: { name: string; permintaan: number; fullDate: string }[];
+    chart30d: { name: string; permintaan: number; fullDate: string }[];
+    recentRequests: any[];
+  } | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchLiveStats = async () => {
+      try {
+        const res = await fetch('/api/stats', { credentials: 'include' });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && isMounted) {
+            setLiveStats(data);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to fetch dashboard stats:', err);
+      }
+    };
+    fetchLiveStats();
+    return () => { isMounted = false; };
+  }, []);
+
   const stats = useMemo(() => {
-    // Filter data berdasarkan role
+    const labelContext = (isSuperAdmin || isAdminPolres) ? 'Seluruh Jatim' : `Unit ${currentUser.kesatuan}`;
+
+    if (liveStats) {
+      return {
+        totalUsers: liveStats.personnel?.total ?? 0,
+        activeRequests: liveStats.requests?.active ?? 0,
+        completedRequests: liveStats.requests?.completed ?? 0,
+        rejectedRequests: liveStats.requests?.rejected ?? 0,
+        pendingRequests: liveStats.requests?.pending ?? 0,
+        processingRequests: liveStats.requests?.processing ?? 0,
+        labelContext
+      };
+    }
+
+    // Filter fallback data berdasarkan role jika prop requests/personnel tersedia
     const relevantPersonnel = (isSuperAdmin || isAdminPolres) ? personnel : personnel.filter(p => p.kesatuan === currentUser.kesatuan);
     const relevantRequests = (isSuperAdmin || isAdminPolres) ? requests : requests.filter(r => r.kesatuan === currentUser.kesatuan);
 
@@ -45,11 +96,16 @@ const Dashboard: React.FC<DashboardProps> = ({ requests, personnel, currentUser,
       rejectedRequests: rejected,
       pendingRequests: pending,
       processingRequests: processing,
-      labelContext: (isSuperAdmin || isAdminPolres) ? 'Seluruh Jatim' : `Unit ${currentUser.kesatuan}`
+      labelContext
     };
-  }, [requests, personnel, currentUser, isSuperAdmin, isAdminPolres]);
+  }, [liveStats, requests, personnel, currentUser, isSuperAdmin, isAdminPolres]);
 
   const chartData = useMemo(() => {
+    if (liveStats) {
+      const data = chartRange === '30' ? liveStats.chart30d : liveStats.chart7d;
+      if (Array.isArray(data) && data.length > 0) return data;
+    }
+
     const relevantRequests = (isSuperAdmin || isAdminPolres) ? requests : requests.filter(r => r.kesatuan === currentUser.kesatuan);
     const rangeDays = parseInt(chartRange);
     
@@ -62,11 +118,11 @@ const Dashboard: React.FC<DashboardProps> = ({ requests, personnel, currentUser,
     const dayNames = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
 
     return daysArray.map(date => {
-      const dayStart = new Date(date.setHours(0, 0, 0, 0)).getTime();
-      const dayEnd = new Date(date.setHours(23, 59, 59, 999)).getTime();
+      const dayStart = new Date(date).setHours(0, 0, 0, 0);
+      const dayEnd = new Date(date).setHours(23, 59, 59, 999);
       
       const count = relevantRequests.filter(r => {
-        const createdAt = r.createdAt || 0;
+        const createdAt = Number(r.createdAt) || 0;
         return createdAt >= dayStart && createdAt <= dayEnd;
       }).length;
 
@@ -76,12 +132,16 @@ const Dashboard: React.FC<DashboardProps> = ({ requests, personnel, currentUser,
         fullDate: date.toLocaleDateString('id-ID', { day: 'numeric', month: 'long', year: 'numeric' })
       };
     });
-  }, [requests, isSuperAdmin, isAdminPolres, currentUser.kesatuan, chartRange]);
+  }, [liveStats, requests, isSuperAdmin, isAdminPolres, currentUser.kesatuan, chartRange]);
 
   const recentRequests = useMemo(() => {
+    if (liveStats && Array.isArray(liveStats.recentRequests) && liveStats.recentRequests.length > 0) {
+      return liveStats.recentRequests;
+    }
+
     const relevant = (isSuperAdmin || isAdminPolres) ? requests : requests.filter(r => r.kesatuan === currentUser.kesatuan);
-    return relevant.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 5);
-  }, [requests, isSuperAdmin, isAdminPolres, currentUser.kesatuan]);
+    return [...relevant].sort((a, b) => (Number(b.createdAt) || 0) - (Number(a.createdAt) || 0)).slice(0, 5);
+  }, [liveStats, requests, isSuperAdmin, isAdminPolres, currentUser.kesatuan]);
 
   return (
     <motion.main 

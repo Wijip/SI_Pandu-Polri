@@ -1058,7 +1058,7 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
                             <button 
                               onClick={() => { 
                                 setViewingReq(req); 
-                                setShowDetailPassword((isSuperAdmin || isAdminPolres) && req.status === RequestStatus.SELESAI); 
+                                setShowDetailPassword(req.status === RequestStatus.SELESAI); 
                               }}
                               className={`w-9 h-9 rounded-xl flex items-center justify-center transition-all ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-400 hover:bg-white hover:text-slate-900 hover:shadow-sm'}`}
                               title="Detail"

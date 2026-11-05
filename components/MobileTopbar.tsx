@@ -43,6 +43,7 @@ const MobileTopbar: React.FC<MobileTopbarProps> = ({ siteSettings, setSiteSettin
     navItems.push({ path: '/reports', icon: 'analytics', label: 'Rekap Laporan' });
   } else if (isUser) {
     navItems.push({ path: '/requests', icon: 'lock_reset', label: 'Permintaan Reset' });
+    navItems.push({ path: '/settings', icon: 'settings', label: 'Pengaturan' });
   }
 
   const handleLogoutClick = () => {

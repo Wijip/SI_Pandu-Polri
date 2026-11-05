@@ -117,15 +117,37 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handleUpdateAdminProfile = (e: React.FormEvent) => {
+  const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+
+  const handleUpdateAdminProfile = async (e: React.FormEvent) => {
     e.preventDefault();
-    const updatedUser = { 
-      ...currentUser, 
-      ...adminForm 
-    };
-    setCurrentUser(updatedUser);
-    showToast('Profil berhasil diperbarui');
-    addLog?.('Sistem', `Memperbarui profil: ${adminForm.nama}`);
+    setIsUpdatingProfile(true);
+    try {
+      const res = await fetch('/api/profile', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify(adminForm)
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCurrentUser(data.user);
+        localStorage.setItem('user_profile', JSON.stringify(data.user));
+        if (data.user.foto) {
+          setAdminForm(prev => ({ ...prev, foto: data.user.foto }));
+        }
+        showToast('Profil berhasil diperbarui');
+        addLog?.('Sistem', `Memperbarui profil: ${adminForm.nama}`);
+      } else {
+        showToast(data.message || 'Gagal memperbarui profil', 'error');
+      }
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      showToast('Terjadi kesalahan koneksi', 'error');
+    } finally {
+      setIsUpdatingProfile(false);
+    }
   };
 
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -167,21 +189,44 @@ const Settings: React.FC<SettingsProps> = ({
     }
   };
 
-  const handlePasswordUpdate = (e: React.FormEvent) => {
+  const handlePasswordUpdate = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (passwordForm.current !== currentUser.passwordPlain) {
-      return showToast('Password saat ini tidak valid', 'error');
+    if (!passwordForm.current) {
+      return showToast('Password saat ini wajib diisi', 'error');
     }
     if (!checkPasswordStrength(passwordForm.new)) {
       return showToast('Password baru harus minimal 8 karakter, mengandung huruf besar, angka, dan simbol', 'error');
     }
     if (passwordForm.new !== passwordForm.confirm) {
-      return showToast('Konfirmasi password tidak cocok', 'error');
+      return showToast('Konfirmasi password baru tidak cocok', 'error');
     }
-    setCurrentUser({ ...currentUser, passwordPlain: passwordForm.new });
-    showToast('Password berhasil diperbarui');
-    addLog?.('Sistem', 'Melakukan pembaruan password keamanan akun');
-    setPasswordForm({ current: '', new: '', confirm: '' });
+
+    setIsUpdatingPassword(true);
+    try {
+      const res = await fetch('/api/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({
+          currentPassword: passwordForm.current,
+          newPassword: passwordForm.new,
+          confirmPassword: passwordForm.confirm
+        })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        showToast('Password berhasil diperbarui');
+        addLog?.('Sistem', 'Melakukan pembaruan password keamanan akun');
+        setPasswordForm({ current: '', new: '', confirm: '' });
+      } else {
+        showToast(data.message || 'Gagal memperbarui password', 'error');
+      }
+    } catch (error) {
+      console.error('Error changing password:', error);
+      showToast('Terjadi kesalahan koneksi', 'error');
+    } finally {
+      setIsUpdatingPassword(false);
+    }
   };
 
   return (
@@ -456,15 +501,28 @@ const Settings: React.FC<SettingsProps> = ({
                   onChange={(e) => setAdminForm(prev => ({ ...prev, telepon: e.target.value }))}
                 />
               </div>
+              <div className="space-y-2">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest pl-1">Email Dinas</label>
+                <input 
+                  type="email" 
+                  className={`w-full px-5 py-3.5 rounded-xl border focus:outline-none font-bold transition-all text-sm ${
+                    siteSettings.darkMode ? 'bg-slate-800 border-slate-700 text-white focus:border-indigo-500' : 'bg-slate-50 border-slate-100 text-slate-700 focus:bg-white focus:border-indigo-500'
+                  }`}
+                  value={adminForm.email}
+                  onChange={(e) => setAdminForm(prev => ({ ...prev, email: e.target.value }))}
+                />
+              </div>
             </div>
           </div>
-          {!isAdminPolres && (
-            <div className="flex justify-end pt-4 border-t border-slate-100 dark:border-slate-800">
-              <button type="submit" className="px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95">
-                Perbarui Profil
-              </button>
-            </div>
-          )}
+          <div className="flex justify-end pt-4 border-t border-slate-100 dark:border-slate-800">
+            <button 
+              type="submit" 
+              disabled={isUpdatingProfile}
+              className={`px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 flex items-center gap-2 ${isUpdatingProfile ? 'opacity-60 cursor-not-allowed' : ''}`}
+            >
+              {isUpdatingProfile ? 'Menyimpan...' : 'Perbarui Profil'}
+            </button>
+          </div>
         </form>
       </div>
 
@@ -561,14 +619,13 @@ const Settings: React.FC<SettingsProps> = ({
                 />
               </div>
             </div>
-            {!isAdminPolres && (
-              <button 
-                type="submit"
-                className="px-8 py-4 bg-slate-900 text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-800 transition-all shadow-xl shadow-slate-200"
-              >
-                Perbarui Password
-              </button>
-            )}
+            <button 
+              type="submit"
+              disabled={isUpdatingPassword}
+              className={`px-8 py-4 bg-slate-900 text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 flex items-center gap-2 ${isUpdatingPassword ? 'opacity-60 cursor-not-allowed' : ''}`}
+            >
+              {isUpdatingPassword ? 'Menyimpan...' : 'Perbarui Password'}
+            </button>
           </div>
         </form>
       </div>

@@ -37,6 +37,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     { path: '/settings', icon: 'tune', label: 'Pengaturan' },
   ] : isUser ? [
     { path: '/requests', icon: 'lock_reset', label: 'Permintaan Reset' },
+    { path: '/settings', icon: 'tune', label: 'Pengaturan' },
   ] : [];
 
   const adminNav = [

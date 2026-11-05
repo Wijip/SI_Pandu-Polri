@@ -216,7 +216,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
             kesatuan,
             email: String(row.Email || row.email || '').trim() || `${nrp}@polri.go.id`,
             emailAlias: String(row.EmailAlias || row.email_alias || '').trim(),
-            passwordPlain: String(row.Password || row.password || '').trim() || 'pCtAi9T2221G',
+            passwordPlain: String(row.Password || row.password || '').trim() || 'PasswordDemo123!',
             role: (String(row.Role || row.role || '').toUpperCase() as UserRole) || UserRole.USER,
             status: 'Aktif'
           });
@@ -741,7 +741,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                     {isSuperAdmin && (
                       <th className="px-6 py-4">
                         <div className="flex items-center gap-1">
-                          Password
+                          Keamanan
                         </div>
                       </th>
                     )}
@@ -798,10 +798,11 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                       )}
                       {isSuperAdmin && (
                         <td className="px-6 py-4">
-                          <div className="flex items-center gap-2">
-                            <code className={`text-[10px] px-1.5 py-0.5 rounded font-mono ${isDarkMode ? 'bg-slate-800 text-slate-300' : 'bg-slate-100 text-slate-600'}`}>
-                              {p.passwordPlain}
-                            </code>
+                          <div className="flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-xs text-emerald-500">lock</span>
+                            <span className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
+                              Terkunci (Bcrypt)
+                            </span>
                           </div>
                         </td>
                       )}

@@ -21,11 +21,43 @@ interface ReportsProps {
   currentUser: Personnel;
 }
 
-const Reports: React.FC<ReportsProps> = ({ requests, showToast, siteSettings, currentUser }) => {
+const Reports: React.FC<ReportsProps> = ({ requests: propRequests, showToast, siteSettings, currentUser }) => {
   const isDarkMode = siteSettings?.darkMode;
+  const [liveRequests, setLiveRequests] = useState<ResetRequest[]>(propRequests || []);
+  const [, setIsLoading] = useState(false);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+
+  useEffect(() => {
+    let isMounted = true;
+    const fetchRequestsForReports = async () => {
+      setIsLoading(true);
+      try {
+        const res = await fetch('/api/requests?limit=all', { credentials: 'include' });
+        if (res.ok) {
+          const result = await res.json();
+          if (result && Array.isArray(result.data) && isMounted) {
+            setLiveRequests(result.data);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load reports data:', e);
+      } finally {
+        if (isMounted) setIsLoading(false);
+      }
+    };
+
+    if (!propRequests || propRequests.length === 0) {
+      fetchRequestsForReports();
+    } else {
+      setLiveRequests(propRequests);
+    }
+
+    return () => { isMounted = false; };
+  }, [propRequests]);
+
+  const requests = liveRequests;
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);

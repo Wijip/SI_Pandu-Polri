@@ -20,7 +20,7 @@
     "cookie-parser": "^1.4.7",
     "cors": "^2.8.6",
     "dotenv": "^17.3.1",
-    "exceljs": "^4.4.0",
+    "exceljs": "^3.4.0",
     "express": "^5.2.1",
     "express-rate-limit": "^8.4.1",
     "express-session": "^1.19.0",
@@ -29,12 +29,12 @@
     "motion": "^12.38.0",
     "multer": "^2.1.1",
     "mysql2": "^3.22.2",
-    "nodemailer": "^8.0.4",
+    "nodemailer": "^10.0.10",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-router-dom": "^7.1.0",
     "recharts": "^2.15.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.4",
     "socket.io": "^4.8.3",
     "socket.io-client": "^4.8.3",
     "tailwind-merge": "^2.5.5",
@@ -54,5 +54,18 @@
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
     "vite": "^6.0.5"
-  }
+  },
+  "description": "",
+  "main": "index.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Wijip/SI_Pandu-Polri.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/Wijip/SI_Pandu-Polri/issues"
+  },
+  "homepage": "https://github.com/Wijip/SI_Pandu-Polri#readme"
 }

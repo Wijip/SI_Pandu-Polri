@@ -20,7 +20,6 @@ import Logs from './views/Logs';
 import Settings from './views/Settings';
 import Login from './views/Login';
 import UserDashboard from './views/UserDashboard';
-import PublicResetForm from './views/PublicResetForm';
 import Sidebar from './components/Sidebar';
 import MobileTopbar from './components/MobileTopbar';
 import Toast from './components/Toast';
@@ -107,17 +106,38 @@ const App: React.FC = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [lRes, sRes] = await Promise.all([
-          fetch('/api/logs', { credentials: 'include' }),
-          fetch('/api/stats', { credentials: 'include' })
-        ]);
+        const fetchTasks: Promise<Response>[] = [
+          fetch('/api/stats', { credentials: 'include' }),
+          fetch('/api/requests?limit=all', { credentials: 'include' }),
+          fetch('/api/personnel?limit=all', { credentials: 'include' })
+        ];
         
-        if (lRes.ok) setLogs(await lRes.json());
-        if (sRes.ok) {
-          const statsData = await sRes.json();
-          // We can remove setRequests and setPersonnel fetching here!
-          // But wait, the app state might need requests/personnel for Notifications or Dashboard props?
-          // I will store stats in state or keep simple
+        const isSuperAdmin = currentUser?.role === UserRole.SUPERADMIN;
+        if (isSuperAdmin) {
+          fetchTasks.push(fetch('/api/logs', { credentials: 'include' }));
+        }
+
+        const results = await Promise.all(fetchTasks);
+        const sRes = results[0];
+        const rRes = results[1];
+        const pRes = results[2];
+        const lRes = isSuperAdmin ? results[3] : null;
+        
+        if (rRes && rRes.ok) {
+          const rData = await rRes.json();
+          if (rData && Array.isArray(rData.data)) {
+            setRequests(rData.data);
+          }
+        }
+        if (pRes && pRes.ok) {
+          const pData = await pRes.json();
+          if (pData && Array.isArray(pData.data)) {
+            setPersonnel(pData.data);
+          }
+        }
+        if (lRes && lRes.ok) setLogs(await lRes.json());
+        if (sRes && sRes.ok) {
+          await sRes.json();
         }
       } catch (error) {
         console.error('Failed to fetch data from API:', error);
@@ -170,7 +190,26 @@ const App: React.FC = () => {
 
   const addLog = useCallback(async (aktivitas: LogEntry['aktivitas'], keterangan: string) => {
     if (!currentUser) return;
-    const newLog: LogEntry = {
+    try {
+      const res = await fetch('/api/logs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ aktivitas, keterangan })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.log) {
+          setLogs(prev => [data.log, ...prev]);
+          return;
+        }
+      }
+    } catch (e) {
+      console.error('Failed to save log to API', e);
+    }
+
+    // Fallback optimis jika respon server terkendala
+    const fallbackLog: LogEntry = {
       id: `L-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
       waktu: Date.now(),
       user: {
@@ -180,29 +219,22 @@ const App: React.FC = () => {
       },
       aktivitas,
       keterangan,
-      ipAddress: '10.12.' + Math.floor(Math.random() * 255) + '.' + Math.floor(Math.random() * 255)
+      ipAddress: '127.0.0.1'
     };
-    
-    setLogs(prev => [newLog, ...prev]);
-    try {
-      await fetch('/api/logs', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        credentials: 'include',
-        body: JSON.stringify(newLog)
-      });
-    } catch (e) {
-      console.error('Failed to save log to API');
-    }
+    setLogs(prev => [fallbackLog, ...prev]);
   }, [currentUser]);
 
   const handleLogout = async () => {
+    try {
+      await addLog('Sistem', 'Pengguna melakukan logout dari sistem');
+    } catch (e) {
+      console.error('Failed to log logout');
+    }
     try {
       await fetch('/api/logout', { method: 'POST', credentials: 'include' });
     } catch (e) {
       console.error('Logout API failed');
     }
-    addLog('Sistem', 'Pengguna melakukan logout dari sistem');
     localStorage.removeItem('user_profile');
     setCurrentUser(null);
   };
@@ -220,60 +252,6 @@ const App: React.FC = () => {
     setNotifications(prev => [newNotif, ...prev]);
   };
 
-  const submitPublicRequest = async (nrp: string, alasan: string, dokumen_kta?: string, prioritas?: any, file?: File) => {
-    const person = personnel.find(p => p.nrp === nrp);
-    if (!person) return { success: false, message: 'NRP tidak terdaftar dalam sistem.' };
-
-    const formData = new FormData();
-    formData.append('id', `REQ-${Math.floor(1000 + Math.random() * 9000)}`);
-    formData.append('nama', person.nama);
-    formData.append('pangkat', person.pangkat || '');
-    formData.append('nrp', person.nrp);
-    formData.append('jabatan', person.jabatan || '');
-    formData.append('kesatuan', person.kesatuan || '');
-    formData.append('waktu_iso', new Date().toISOString());
-    formData.append('status', RequestStatus.MENUNGGU);
-    formData.append('alasan', alasan);
-    formData.append('prioritas', prioritas || 'Normal');
-    formData.append('createdAt', Date.now().toString());
-    
-    if (file) {
-      formData.append('dokumen_kta_file', file);
-    } else if (dokumen_kta) {
-      formData.append('dokumen_kta', dokumen_kta);
-    }
-
-    try {
-      const res = await fetch('/api/requests', {
-        method: 'POST',
-        credentials: 'include',
-        body: formData
-      });
-      
-      if (res.ok) {
-        const newRequest: ResetRequest = {
-          id: formData.get('id') as string,
-          nama: person.nama,
-          pangkat: person.pangkat,
-          nrp: person.nrp,
-          jabatan: person.jabatan,
-          kesatuan: person.kesatuan,
-          waktu_iso: formData.get('waktu_iso') as string,
-          status: RequestStatus.MENUNGGU,
-          alasan: alasan,
-          dokumen_kta: dokumen_kta, // This will be updated on next fetch
-          prioritas: prioritas || 'Normal',
-          createdAt: parseInt(formData.get('createdAt') as string)
-        };
-        setRequests(prev => [newRequest, ...prev]);
-        addNotification('Permintaan Baru', `Pengajuan reset password dari NRP ${nrp}`, 'request', newRequest.id);
-        return { success: true, message: 'Permintaan Anda telah dikirim ke Admin.' };
-      }
-      return { success: false, message: 'Gagal mengirim permintaan ke server.' };
-    } catch (error) {
-      return { success: false, message: 'Terjadi kesalahan koneksi.' };
-    }
-  };
 
   return (
     <HashRouter>
@@ -301,7 +279,6 @@ const App: React.FC = () => {
         <div className={`flex-1 flex flex-col min-w-0 ${currentUser ? 'pt-14 md:pt-0' : ''}`}>
           <Routes>
             <Route path="/login" element={<Login onLogin={(user) => { setCurrentUser(user); }} addLog={addLog} siteSettings={siteSettings} currentUser={currentUser} />} />
-            <Route path="/request-reset" element={<PublicResetForm onSubmit={submitPublicRequest} siteSettings={siteSettings} />} />
             
             <Route path="/" element={
               <ProtectedRoute currentUser={currentUser}>
@@ -352,7 +329,7 @@ const App: React.FC = () => {
             } />
             
             <Route path="/settings" element={
-              <ProtectedRoute anyAdminOnly currentUser={currentUser}>
+              <ProtectedRoute anyAdminOnly allowUser currentUser={currentUser}>
                 <Settings 
                   siteSettings={siteSettings} 
                   setSiteSettings={setSiteSettings} 
