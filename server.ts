@@ -18,6 +18,7 @@ import nodemailer from 'nodemailer';
 import { rateLimit } from 'express-rate-limit';
 import sharp from 'sharp';
 import crypto from 'crypto';
+import net from 'net';
 
 dotenv.config();
 
@@ -154,7 +155,7 @@ if (!process.env.JWT_SECRET) {
     console.warn('⚠️ PERINGATAN KEAMANAN: process.env.JWT_SECRET belum dikonfigurasi. Menggunakan kunci rahasia fallback dev. JANGAN gunakan ini di production!');
   }
 }
-const PORT = 3000;
+const PORT = parseInt(process.env.PORT || '3000', 10);
 const JWT_SECRET = process.env.JWT_SECRET || 'polda-jatim-jwt-secret-2024';
 
 // --- AUTENTIKASI KONEKSI SOCKET.IO HANDSHAKE SECURITY (FASE 7.3) ---
@@ -310,7 +311,7 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ 
+const upload = multer({
   storage: storage,
   limits: { fileSize: 2 * 1024 * 1024 }, // 2MB limit as requested
   fileFilter: (_req, file, cb) => {
@@ -335,7 +336,7 @@ export const pool = {
       console.warn("Database not connected, query skipped:", sql);
       return [[], []];
     }
-    
+
     try {
       const [rows, fields] = await mysqlPool.query(sql, params);
       return [rows, fields];
@@ -359,8 +360,8 @@ const safeAlterQuery = async (sql: string, params: any[] = []) => {
     const [rows, fields] = await mysqlPool.query(sql, params);
     return [rows, fields];
   } catch (err: any) {
-    if (err.code === 'ER_DUP_KEYNAME' || err.errno === 1061 || 
-        err.code === 'ER_DUP_FIELDNAME' || err.errno === 1060) {
+    if (err.code === 'ER_DUP_KEYNAME' || err.errno === 1061 ||
+      err.code === 'ER_DUP_FIELDNAME' || err.errno === 1060) {
       return null;
     }
     console.error(`Safe Alter Query failed:`, err);
@@ -408,12 +409,12 @@ async function initializeDatabase() {
   try {
     console.log('[DATABASE] Connecting strictly to MySQL/MariaDB...');
     const dbName = process.env.DB_NAME || 'polda_jatim_reset';
-    
+
     // Create initial connection without selecting a database to ensure it exists
     const initialPool = mysql.createPool({
       host: process.env.DB_HOST || 'localhost',
       user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || 'B3lpasshooter1004.',
+      password: process.env.DB_PASSWORD || '',
       port: parseInt(process.env.DB_PORT || '3306'),
       waitForConnections: true,
       connectionLimit: 1,
@@ -433,7 +434,7 @@ async function initializeDatabase() {
     mysqlPool = mysql.createPool({
       host: process.env.DB_HOST || 'localhost',
       user: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || 'B3lpasshooter1004.',
+      password: process.env.DB_PASSWORD || '',
       database: dbName,
       port: parseInt(process.env.DB_PORT || '3306'),
       waitForConnections: true,
@@ -450,15 +451,15 @@ async function initializeDatabase() {
 
     // Test connection
     try {
-       const conn = await mysqlPool.getConnection();
-       dbConnected = true;
-       conn.release();
-       console.log(`[DATABASE] Connected successfully to MySQL database via Connection Pooling.`);
+      const conn = await mysqlPool.getConnection();
+      dbConnected = true;
+      conn.release();
+      console.log(`[DATABASE] Connected successfully to MySQL database via Connection Pooling.`);
     } catch (e: any) {
-       console.error(`[DATABASE ERROR] Failed to connect to MySQL: ${e.message}`);
-       console.error(`[DATABASE ERROR] MySQL connection is strictly required. Server will not work without it.`);
-       // Note: we let it continue rather than exit so the dev server stays up, but DB won't work
-       return pool;
+      console.error(`[DATABASE ERROR] Failed to connect to MySQL: ${e.message}`);
+      console.error(`[DATABASE ERROR] MySQL connection is strictly required. Server will not work without it.`);
+      // Note: we let it continue rather than exit so the dev server stays up, but DB won't work
+      return pool;
     }
 
     if (!dbConnected) return pool;
@@ -829,14 +830,14 @@ async function initializeDatabase() {
         INSERT IGNORE INTO personnel (id, nama, pangkat, nrp, jabatan, kesatuan, email, role, password, password_encrypted, status)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
-        'ADM_URY_JATIM', 
-        'Admin Polda Demo', 
-        'Admin', 
-        '79529938', 
-        'Admin Subbidtekinfo Bid Tik (Demo)', 
-        'Polda Jatim', 
-        targetEmail, 
-        'admin', 
+        'ADM_URY_JATIM',
+        'Admin Polda Demo',
+        'Admin',
+        '79529938',
+        'Admin Subbidtekinfo Bid Tik (Demo)',
+        'Polda Jatim',
+        targetEmail,
+        'admin',
         hashedPassword,
         encryptedPassword,
         'Aktif'
@@ -929,37 +930,37 @@ async function startServer() {
       return res.status(403).json({ error: 'Forbidden: Super Admin only' });
     }
     let { name, logo, loginTitle, loginSubtitle, loginTagline1, loginTagline2, requestsTitle, requestsSubtitle, darkMode } = req.body;
-    
+
     try {
       if (logo && logo.startsWith('data:image/')) {
         const matches = logo.match(/^data:image\/([A-Za-z-+\/]+);base64,(.+)$/);
         if (matches && matches.length === 3) {
-            let imageType = matches[1];
-            let base64Data = matches[2];
-            let buffer: any = Buffer.from(base64Data, 'base64');
-            let filename = `logo-${Date.now()}`;
-            
-            const PUBLIC_UPLOAD_DIR = path.join(process.cwd(), 'public_uploads', 'logos');
-            if (!fs.existsSync(PUBLIC_UPLOAD_DIR)) {
-                fs.mkdirSync(PUBLIC_UPLOAD_DIR, { recursive: true });
-            }
+          let imageType = matches[1];
+          let base64Data = matches[2];
+          let buffer: any = Buffer.from(base64Data, 'base64');
+          let filename = `logo-${Date.now()}`;
 
-            if (imageType.includes('svg')) {
-                filename += '.svg';
-            } else if (imageType.includes('png')) {
-                filename += '.png';
-            } else if (imageType.includes('jpeg') || imageType.includes('jpg')) {
-                filename += '.jpg';
-            } else if (imageType.includes('bmp')) {
-                filename += '.bmp';
-            } else if (imageType.includes('x-icon') || imageType.includes('vnd.microsoft.icon')) {
-                filename += '.ico';
-            } else {
-                filename += '.bin'; // Fallback
-            }
-            
-            await fs.promises.writeFile(path.join(PUBLIC_UPLOAD_DIR, filename), buffer);
-            logo = `/public_uploads/logos/${filename}`;
+          const PUBLIC_UPLOAD_DIR = path.join(process.cwd(), 'public_uploads', 'logos');
+          if (!fs.existsSync(PUBLIC_UPLOAD_DIR)) {
+            fs.mkdirSync(PUBLIC_UPLOAD_DIR, { recursive: true });
+          }
+
+          if (imageType.includes('svg')) {
+            filename += '.svg';
+          } else if (imageType.includes('png')) {
+            filename += '.png';
+          } else if (imageType.includes('jpeg') || imageType.includes('jpg')) {
+            filename += '.jpg';
+          } else if (imageType.includes('bmp')) {
+            filename += '.bmp';
+          } else if (imageType.includes('x-icon') || imageType.includes('vnd.microsoft.icon')) {
+            filename += '.ico';
+          } else {
+            filename += '.bin'; // Fallback
+          }
+
+          await fs.promises.writeFile(path.join(PUBLIC_UPLOAD_DIR, filename), buffer);
+          logo = `/public_uploads/logos/${filename}`;
         }
       }
 
@@ -1086,9 +1087,9 @@ async function startServer() {
       const hasSymbol = /[!@#$%^&*(),.?":{}|<>]/.test(newPassword);
       const hasUpper = /[A-Z]/.test(newPassword);
       if (newPassword.length < 8 || !hasNumber || !hasSymbol || !hasUpper) {
-        return res.status(400).json({ 
-          success: false, 
-          message: 'Password baru harus minimal 8 karakter, mengandung huruf besar, angka, dan simbol' 
+        return res.status(400).json({
+          success: false,
+          message: 'Password baru harus minimal 8 karakter, mengandung huruf besar, angka, dan simbol'
         });
       }
 
@@ -1202,7 +1203,7 @@ async function startServer() {
           }).length;
 
           return {
-            name: daysCount > 7 
+            name: daysCount > 7
               ? date.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
               : dayNames[date.getDay()],
             permintaan: count,
@@ -1449,7 +1450,7 @@ async function startServer() {
       user: Number(sRow.user || 0),
       active: Number(sRow.active || 0)
     };
-    
+
     // Explicitly sanitize rows. Only SuperAdmin can see decrypted password.
     const sanitizedRows = rows.map((r: any) => {
       const { password, password_encrypted, ...safeUser } = r;
@@ -1518,11 +1519,11 @@ async function startServer() {
     if (req.user.role !== 'superadmin') {
       return res.status(403).json({ success: false, message: 'Akses ditolak. Hanya SUPERADMIN yang diizinkan mengimpor data personel.' });
     }
-    
+
     try {
       const personnelData = req.body;
       if (!Array.isArray(personnelData)) return res.status(400).json({ success: false, message: 'Data harus berupa array' });
-      
+
       if (personnelData.length === 0) return res.json({ success: true, imported: 0 });
 
       // Build bulk insert query
@@ -1557,7 +1558,7 @@ async function startServer() {
     const hashedPassword = await bcrypt.hash(rawPass, 10);
     const encryptedPassword = encryptResetPassword(rawPass);
     const finalKesatuan = (p.kesatuan && String(p.kesatuan).trim()) ? String(p.kesatuan).trim() : null;
-    
+
     try {
       await pool.query(`
         INSERT INTO personnel (id, nama, pangkat, nrp, jabatan, kesatuan, email, role, password, password_encrypted, status)
@@ -1567,14 +1568,14 @@ async function startServer() {
     } catch (error: any) {
       console.error('Failed to create personnel:', error);
       if (error.code === 'ER_NO_REFERENCED_ROW_2') {
-        return res.status(400).json({ 
-          success: false, 
-          message: `Kesatuan '${p.kesatuan}' tidak terdaftar dalam referensi unit resmi Polda Jatim. Silakan pilih kesatuan yang valid.` 
+        return res.status(400).json({
+          success: false,
+          message: `Kesatuan '${p.kesatuan}' tidak terdaftar dalam referensi unit resmi Polda Jatim. Silakan pilih kesatuan yang valid.`
         });
       }
       if (error.code === 'ER_DUP_ENTRY') {
-        return res.status(409).json({ 
-          success: false, 
+        return res.status(409).json({
+          success: false,
           message: `Peringatan: NRP/NIP ${p.nrp} sudah terdaftar di dalam sistem! Silakan gunakan NRP lain atau periksa kembali data personel.`,
           code: 'DUPLICATE_NRP'
         });
@@ -1590,7 +1591,7 @@ async function startServer() {
     const { id } = req.params;
     const p = req.body;
     const finalKesatuan = (p.kesatuan && String(p.kesatuan).trim()) ? String(p.kesatuan).trim() : null;
-    
+
     try {
       if (p.password) {
         const hashedPassword = await bcrypt.hash(p.password, 10);
@@ -1611,14 +1612,14 @@ async function startServer() {
     } catch (error: any) {
       console.error('Failed to update personnel:', error);
       if (error.code === 'ER_NO_REFERENCED_ROW_2') {
-        return res.status(400).json({ 
-          success: false, 
-          message: `Kesatuan '${p.kesatuan}' tidak terdaftar dalam referensi unit resmi Polda Jatim. Silakan pilih kesatuan yang valid.` 
+        return res.status(400).json({
+          success: false,
+          message: `Kesatuan '${p.kesatuan}' tidak terdaftar dalam referensi unit resmi Polda Jatim. Silakan pilih kesatuan yang valid.`
         });
       }
       if (error.code === 'ER_DUP_ENTRY') {
-        return res.status(409).json({ 
-          success: false, 
+        return res.status(409).json({
+          success: false,
           message: `Peringatan: NRP/NIP ${p.nrp} sudah terdaftar di dalam sistem! Silakan gunakan NRP lain atau periksa kembali data personel.`,
           code: 'DUPLICATE_NRP'
         });
@@ -1647,21 +1648,21 @@ async function startServer() {
 
     try {
       const [rows]: any = await pool.query(
-        'SELECT * FROM personnel WHERE email = ? AND is_deleted = 0', 
+        'SELECT * FROM personnel WHERE email = ? AND is_deleted = 0',
         [cleanEmail]
       );
-      
+
       if (rows.length > 0) {
         const user = rows[0];
         const isMatch = await bcrypt.compare(cleanPassword, user.password);
-        
+
         if (isMatch) {
           // Invalidate previous unused OTPs for this user's NRP
           await pool.query('UPDATE otp_codes SET isUsed = 1 WHERE nrp = ? AND isUsed = 0', [user.nrp]);
 
           // Fase 9.2: Generate Cryptographically Secure 6-digit numeric OTP (100000 - 999999)
           const otpCode = crypto.randomInt(100000, 1000000).toString();
-          
+
           // Fase 9.2: Compute one-way SHA-256 cryptographic digest of the OTP
           const codeHash = crypto.createHash('sha256').update(otpCode).digest('hex');
 
@@ -1682,7 +1683,7 @@ async function startServer() {
 
           // Fase 9.1 & 9.2: Save code_hash and tempToken to database (zero plaintext OTP in MySQL)
           await pool.query(
-            'INSERT INTO otp_codes (nrp, code_hash, expiresAt, token, isUsed, attempts) VALUES (?, ?, ?, ?, 0, 0)', 
+            'INSERT INTO otp_codes (nrp, code_hash, expiresAt, token, isUsed, attempts) VALUES (?, ?, ?, ?, 0, 0)',
             [user.nrp, codeHash, expiresAt, tempToken]
           );
 
@@ -1706,12 +1707,12 @@ async function startServer() {
           }
 
           // Fase 9.4: Return response asking for MFA, including tempToken (Sequence Diagram Fig 3.10)
-          res.json({ 
-            success: true, 
-            mfa_required: true, 
+          res.json({
+            success: true,
+            mfa_required: true,
             identifier: user.nrp,
             tempToken,
-            message: 'Kredensial benar. Silakan masukkan kode OTP yang dikirim ke email Anda.' 
+            message: 'Kredensial benar. Silakan masukkan kode OTP yang dikirim ke email Anda.'
           });
         } else {
           res.status(401).json({ success: false, message: 'Email atau Password salah' });
@@ -1745,9 +1746,9 @@ async function startServer() {
         }
         verifiedNrp = decodedTemp.nrp;
       } catch (jwtErr: any) {
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Sesi token sementara telah kedaluwarsa atau tidak valid (5 menit). Silakan login kembali.' 
+        return res.status(401).json({
+          success: false,
+          message: 'Sesi token sementara telah kedaluwarsa atau tidak valid (5 menit). Silakan login kembali.'
         });
       }
     }
@@ -1764,9 +1765,9 @@ async function startServer() {
       );
 
       if (otpRows.length === 0) {
-        return res.status(401).json({ 
-          success: false, 
-          message: 'Kode OTP tidak ditemukan atau sudah kedaluwarsa (berlaku 5 menit). Silakan login kembali.' 
+        return res.status(401).json({
+          success: false,
+          message: 'Kode OTP tidak ditemukan atau sudah kedaluwarsa (berlaku 5 menit). Silakan login kembali.'
         });
       }
 
@@ -1830,7 +1831,7 @@ async function startServer() {
 
       const user = userRows[0];
       const { password: _, ...userWithoutPassword } = user;
-      
+
       // Update lastLogin
       await pool.query('UPDATE personnel SET lastLogin = ? WHERE id = ?', [Date.now(), user.id]);
 
@@ -1867,7 +1868,7 @@ async function startServer() {
 
       // Create JWT Token
       const token = jwt.sign(userWithoutPassword, JWT_SECRET, { expiresIn: '24h' });
-      
+
       // Set HttpOnly Cookie
       res.cookie('token', token, {
         httpOnly: true,
@@ -1875,7 +1876,7 @@ async function startServer() {
         sameSite: 'lax',
         maxAge: 24 * 60 * 60 * 1000 // 24 hours
       });
-      
+
       res.json({ success: true, user: userWithoutPassword });
     } catch (error) {
       console.error('[MFA VERIFY] Database error:', error);
@@ -1970,7 +1971,7 @@ async function startServer() {
 
       if (req.user.role === 'user') {
         const userKesatuan = req.user.kesatuan || '';
-        
+
         // Set column widths
         worksheet.getColumn('A').width = 30;
         worksheet.getColumn('B').width = 20;
@@ -2048,7 +2049,7 @@ async function startServer() {
 
       res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
       res.setHeader('Content-Disposition', `attachment; filename=${filename}`);
-      
+
       await workbook.xlsx.write(res);
       res.end();
     } catch (error) {
@@ -2106,7 +2107,7 @@ async function startServer() {
     }));
 
     const ws = XLSX.utils.json_to_sheet(dataToExport);
-    
+
     // Force NRP/NIP column (index 4) to be text
     const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
     for (let R = range.s.r + 1; R <= range.e.r; ++R) {
@@ -2119,23 +2120,23 @@ async function startServer() {
 
     // Set column widths
     const wscols = [
-      {wch: 5},
-      {wch: 25},
-      {wch: 25},
-      {wch: 15},
-      {wch: 20},
-      {wch: 25},
-      {wch: 25},
-      {wch: 15},
-      {wch: 20}
+      { wch: 5 },
+      { wch: 25 },
+      { wch: 25 },
+      { wch: 15 },
+      { wch: 20 },
+      { wch: 25 },
+      { wch: 25 },
+      { wch: 15 },
+      { wch: 20 }
     ];
     ws['!cols'] = wscols;
 
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, ws, "Permintaan Reset");
-    
+
     const buffer = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
-    
+
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename=permintaan_reset_${Date.now()}.xlsx`);
     res.send(buffer);
@@ -2162,10 +2163,10 @@ async function startServer() {
         const inputNama = (nama || '').trim();
 
         if (existingNama.toLowerCase() !== inputNama.toLowerCase()) {
-          return res.json({ 
-            success: true, 
-            conflict: true, 
-            existingNama 
+          return res.json({
+            success: true,
+            conflict: true,
+            existingNama
           });
         }
       }
@@ -2213,7 +2214,7 @@ async function startServer() {
         console.error("Gagal melakukan kompresi gambar KTA", err);
       }
     }
-    
+
     // Enforce kesatuan for non-superadmins
     const finalKesatuan = req.user.role !== 'superadmin' ? req.user.kesatuan : (r.kesatuan || 'Polda Jatim');
 
@@ -2221,12 +2222,12 @@ async function startServer() {
     if (req.user.role !== 'superadmin') {
       const inputKesatuan = String(r.kesatuan || '').trim().toLowerCase();
       const userKesatuan = String(req.user.kesatuan || '').trim().toLowerCase();
-      
+
       if (inputKesatuan !== userKesatuan) {
         cleanupUploadedFile();
-        return res.status(403).json({ 
-          success: false, 
-          message: `Gagal: Anda hanya diizinkan mengunggah data untuk wilayah [${req.user.kesatuan}]. Data wilayah [${r.kesatuan}] ditolak.` 
+        return res.status(403).json({
+          success: false,
+          message: `Gagal: Anda hanya diizinkan mengunggah data untuk wilayah [${req.user.kesatuan}]. Data wilayah [${r.kesatuan}] ditolak.`
         });
       }
     }
@@ -2234,9 +2235,9 @@ async function startServer() {
     // Backend Guard: Reject if JABATAN is empty
     if (!r.jabatan || r.jabatan.trim() === '' || r.jabatan === '-') {
       cleanupUploadedFile();
-      return res.status(400).json({ 
-        success: false, 
-        message: `Gagal: Kolom 'JABATAN' untuk personel ${r.nama} (${r.nrp}) tidak boleh kosong. Harap lengkapi data jabatan di file Excel Anda.` 
+      return res.status(400).json({
+        success: false,
+        message: `Gagal: Kolom 'JABATAN' untuk personel ${r.nama} (${r.nrp}) tidak boleh kosong. Harap lengkapi data jabatan di file Excel Anda.`
       });
     }
 
@@ -2245,12 +2246,12 @@ async function startServer() {
       // Override explicitly from server for both single and mass inputs
       const waktuIso = new Date().toISOString();
       const status = 'MENUNGGU';
-      
+
       let prioritas = r.prioritas || 'Normal';
       // Map Excel values if sent raw
       if (prioritas === 'Bukan Prioritas') prioritas = 'Normal';
       if (prioritas === 'Prioritas Mendesak') prioritas = 'Mendesak';
-      
+
       const createdAt = Date.now();
 
       await pool.query(`
@@ -2260,19 +2261,19 @@ async function startServer() {
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [
-        requestId, 
-        r.nama, 
-        r.pangkat, 
-        r.nrp, 
-        r.jabatan || '-', 
-        finalKesatuan, 
-        r.kontak_person || null, 
-        waktuIso, 
-        status, 
-        r.alasan || 'Import Data', 
-        r.catatan || null, 
-        filename, 
-        prioritas, 
+        requestId,
+        r.nama,
+        r.pangkat,
+        r.nrp,
+        r.jabatan || '-',
+        finalKesatuan,
+        r.kontak_person || null,
+        waktuIso,
+        status,
+        r.alasan || 'Import Data',
+        r.catatan || null,
+        filename,
+        prioritas,
         createdAt
       ]);
 
@@ -2291,9 +2292,9 @@ async function startServer() {
       cleanupUploadedFile();
       console.error('Failed to create request:', error);
       if (error.code === 'ER_NO_REFERENCED_ROW_2') {
-        return res.status(400).json({ 
-          success: false, 
-          message: `Kesatuan '${finalKesatuan}' tidak terdaftar dalam referensi unit resmi Polda Jatim. Silakan pilih kesatuan yang valid.` 
+        return res.status(400).json({
+          success: false,
+          message: `Kesatuan '${finalKesatuan}' tidak terdaftar dalam referensi unit resmi Polda Jatim. Silakan pilih kesatuan yang valid.`
         });
       }
       res.status(500).json({ success: false, message: 'Gagal menyimpan data ke database' });
@@ -2339,11 +2340,11 @@ async function startServer() {
         }
 
         if (!isSuperAdmin && itemKesatuan.toLowerCase() !== userKesatuan.toLowerCase()) {
-          errors.push({ 
-            row: rowNum, 
-            nrp, 
-            nama, 
-            existingNama: `Kesatuan tidak sesuai wilayah Anda (${userKesatuan})` 
+          errors.push({
+            row: rowNum,
+            nrp,
+            nama,
+            existingNama: `Kesatuan tidak sesuai wilayah Anda (${userKesatuan})`
           });
           continue;
         }
@@ -2485,7 +2486,7 @@ async function startServer() {
   app.get('/api/download/kta/:filename', isAdmin, async (req: any, res: any) => {
     const { filename } = req.params;
     const filePath = path.join(PRIVATE_UPLOAD_DIR, filename);
-    
+
     if (fs.existsSync(filePath)) {
       res.download(filePath);
     } else {
@@ -2496,7 +2497,7 @@ async function startServer() {
   app.put('/api/requests/:id', isAdmin, async (req: any, res: any) => {
     const { id } = req.params;
     const r = req.body;
-    
+
     if (req.user.role === 'admin') {
       return res.status(403).json({ success: false, message: 'Akses ditolak. Role ADMIN hanya memiliki akses baca (Read-Only).' });
     }
@@ -2505,7 +2506,7 @@ async function startServer() {
     if (req.user.role !== 'superadmin') {
       return res.status(403).json({ success: false, message: 'Akses ditolak. Hak akses tidak cukup.' });
     }
-    
+
     try {
       // Get previous status for logging
       const [prevRows]: any = await pool.query('SELECT status FROM reset_requests WHERE id = ?', [id]);
@@ -2537,11 +2538,11 @@ async function startServer() {
               alasan_penolakan = ?
           WHERE id = ?
         `, [
-          r.status, 
-          storedPassword, 
-          r.catatan || null, 
-          r.updatedAt || null, 
-          resetInfoStr, 
+          r.status,
+          storedPassword,
+          r.catatan || null,
+          r.updatedAt || null,
+          resetInfoStr,
           r.prioritas || 'Normal',
           r.alasan_penolakan || null,
           id
@@ -2571,7 +2572,7 @@ async function startServer() {
               INSERT INTO logs (id, waktu, user_nama, user_role, aktivitas, keterangan, ipAddress)
               VALUES (?, ?, ?, ?, ?, ?, ?)
             `, [logId, logWaktu, pNama, pRole, 'Update Status Request', metadata, ipAddr]);
-          } catch(e) {
+          } catch (e) {
             console.error('Async logging failed:', e);
           }
         });
@@ -2581,7 +2582,7 @@ async function startServer() {
       if (r.status === 'DITOLAK') {
         const [userRows]: any = await pool.query('SELECT email FROM personnel WHERE nrp = ?', [r.nrp]);
         const userEmail = userRows.length > 0 ? userRows[0].email : null;
-        
+
         if (userEmail) {
           const mailOptions = {
             from: process.env.SMTP_USER || 'your-email@polda-jatim.go.id',
@@ -2612,7 +2613,7 @@ async function startServer() {
 
   app.delete('/api/requests/:id', isAdmin, async (req: any, res: any) => {
     const { id } = req.params;
-    
+
     if (req.user.role === 'admin') {
       return res.status(403).json({ success: false, message: 'Akses ditolak. Role ADMIN hanya memiliki akses baca (Read-Only).' });
     }
@@ -2621,7 +2622,7 @@ async function startServer() {
     if (req.user.role !== 'superadmin') {
       return res.status(403).json({ success: false, message: 'Akses ditolak. Hak akses tidak cukup.' });
     }
-    
+
     await pool.query('UPDATE reset_requests SET is_deleted = 1 WHERE id = ?', [id]);
     res.json({ success: true });
   });
@@ -2718,7 +2719,10 @@ async function startServer() {
   // Vite Middleware
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
-      server: { middlewareMode: true },
+      server: {
+        middlewareMode: true,
+        hmr: { server }
+      },
       appType: 'spa',
     });
     app.use(vite.middlewares);
@@ -2730,8 +2734,33 @@ async function startServer() {
     });
   }
 
-  server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://localhost:${PORT}`);
+  // Helper to dynamically check if a port is available
+  const checkPortAvailable = (portToTest: number): Promise<boolean> => {
+    return new Promise((resolve) => {
+      const tester = net.createServer()
+        .once('error', () => resolve(false))
+        .once('listening', () => tester.close(() => resolve(true)))
+        .listen(portToTest, '0.0.0.0');
+    });
+  };
+
+  const getAvailablePort = async (startPort: number): Promise<number> => {
+    let portToTry = startPort;
+    while (!(await checkPortAvailable(portToTry))) {
+      console.warn(`⚠️ [PORT CONFLICT] Port ${portToTry} sedang digunakan oleh service lain. Mengalihkan ke port ${portToTry + 1}...`);
+      portToTry++;
+    }
+    return portToTry;
+  };
+
+  const activePort = await getAvailablePort(PORT);
+
+  server.listen(activePort, '0.0.0.0', () => {
+    console.log(`================================================================`);
+    console.log(`🚀 SI-PANDU POLRI SERVER AKTIF & SIAP DIGUNAKAN`);
+    console.log(`📡 URL Web & API : http://localhost:${activePort}`);
+    console.log(`⚡ Socket.IO     : Terintegrasi pada http://localhost:${activePort}`);
+    console.log(`================================================================`);
   });
 }
 
