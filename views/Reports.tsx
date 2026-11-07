@@ -1,4 +1,4 @@
-import React, { useMemo, useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import * as XLSX from 'xlsx';
 import { 
   BarChart, 
@@ -12,52 +12,94 @@ import {
   Pie, 
   Cell
 } from 'recharts';
-import { ResetRequest, RequestStatus, SiteSettings, UserRole, Personnel } from '../types';
+import { ResetRequest, SiteSettings, UserRole, Personnel } from '../types';
+
+interface ReportSummaryData {
+  total: number;
+  pieData: {
+    chart: Array<{ name: string; value: number; color: string }>;
+    total: number;
+    finished: number;
+    rejected: number;
+    pending: number;
+  };
+  barData: Array<{ name: string; permintaan: number }>;
+  polresSummary: Array<{
+    name: string;
+    total: number;
+    backlog: number;
+    selesai: number;
+    ditolak: number;
+    ratio: string;
+    repeat: string;
+    avg: string;
+  }>;
+}
+
+const defaultSummary: ReportSummaryData = {
+  total: 0,
+  pieData: {
+    chart: [
+      { name: 'Selesai (0%)', value: 0, color: '#10b981' },
+      { name: 'Ditolak (0%)', value: 0, color: '#ef4444' },
+      { name: 'Proses (0%)', value: 0, color: '#f59e0b' }
+    ],
+    total: 0,
+    finished: 0,
+    rejected: 0,
+    pending: 0
+  },
+  barData: ['SEN', 'SEL', 'RAB', 'KAM', 'JUM', 'SAB', 'MIN'].map(name => ({ name, permintaan: 0 })),
+  polresSummary: []
+};
 
 interface ReportsProps {
-  requests: ResetRequest[];
+  requests?: ResetRequest[];
   showToast?: (msg: string) => void;
   siteSettings?: SiteSettings;
   currentUser: Personnel;
 }
 
-const Reports: React.FC<ReportsProps> = ({ requests: propRequests, showToast, siteSettings, currentUser }) => {
+const Reports: React.FC<ReportsProps> = ({ showToast, siteSettings, currentUser }) => {
   const isDarkMode = siteSettings?.darkMode;
-  const [liveRequests, setLiveRequests] = useState<ResetRequest[]>(propRequests || []);
-  const [, setIsLoading] = useState(false);
+  const [summaryData, setSummaryData] = useState<ReportSummaryData>(defaultSummary);
+  const [isLoading, setIsLoading] = useState(false);
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
 
+  // Fetch server-side aggregated metrics directly from MySQL (Fase 4 Optimization)
   useEffect(() => {
     let isMounted = true;
-    const fetchRequestsForReports = async () => {
+    const fetchSummary = async () => {
       setIsLoading(true);
       try {
-        const res = await fetch('/api/requests?limit=all', { credentials: 'include' });
+        const queryParams = new URLSearchParams();
+        if (startDate) queryParams.set('startDate', startDate);
+        if (endDate) queryParams.set('endDate', endDate);
+
+        const res = await fetch(`/api/reports/summary?${queryParams.toString()}`, { credentials: 'include' });
         if (res.ok) {
           const result = await res.json();
-          if (result && Array.isArray(result.data) && isMounted) {
-            setLiveRequests(result.data);
+          if (result && result.success && isMounted) {
+            setSummaryData({
+              total: result.total || 0,
+              pieData: result.pieData || defaultSummary.pieData,
+              barData: result.barData || defaultSummary.barData,
+              polresSummary: result.polresSummary || []
+            });
           }
         }
       } catch (e) {
-        console.error('Failed to load reports data:', e);
+        console.error('Failed to load reports summary:', e);
       } finally {
         if (isMounted) setIsLoading(false);
       }
     };
 
-    if (!propRequests || propRequests.length === 0) {
-      fetchRequestsForReports();
-    } else {
-      setLiveRequests(propRequests);
-    }
-
+    fetchSummary();
     return () => { isMounted = false; };
-  }, [propRequests]);
-
-  const requests = liveRequests;
+  }, [startDate, endDate]);
 
   useEffect(() => {
     const handleResize = () => setWindowWidth(window.innerWidth);
@@ -66,90 +108,7 @@ const Reports: React.FC<ReportsProps> = ({ requests: propRequests, showToast, si
   }, []);
 
   const isMobile = windowWidth < 768;
-
-  const filteredRequests = useMemo(() => {
-    return requests.filter(req => {
-      // Filter by role & kesatuan: Only 'user' role is restricted to their own kesatuan
-      // 'admin' and 'superadmin' can see all requests
-      if (currentUser.role === UserRole.USER && req.kesatuan !== currentUser.kesatuan) {
-        return false;
-      }
-
-      let matchesDate = true;
-      const reqDate = new Date(req.createdAt).setHours(0,0,0,0);
-      if (startDate) {
-        const start = new Date(startDate).setHours(0,0,0,0);
-        if (reqDate < start) matchesDate = false;
-      }
-      if (endDate) {
-        const end = new Date(endDate).setHours(23,59,59,999);
-        if (reqDate > end) matchesDate = false;
-      }
-      return matchesDate;
-    });
-  }, [requests, startDate, endDate]);
-
-  const barData = useMemo(() => {
-    const days = ['SEN', 'SEL', 'RAB', 'KAM', 'JUM', 'SAB', 'MIN'];
-    return days.map((day, index) => ({
-      name: day,
-      permintaan: filteredRequests.filter(r => (new Date(r.createdAt).getDay() || 7) === (index + 1)).length
-    }));
-  }, [filteredRequests]);
-
-  const pieData = useMemo(() => {
-    const finished = filteredRequests.filter(r => r.status === RequestStatus.SELESAI).length;
-    const rejected = filteredRequests.filter(r => r.status === RequestStatus.DITOLAK).length;
-    const pending = filteredRequests.filter(r => r.status !== RequestStatus.SELESAI && r.status !== RequestStatus.DITOLAK).length;
-    const total = filteredRequests.length;
-
-    const finishedPercent = total > 0 ? Math.round((finished / total) * 100) : 0;
-    const rejectedPercent = total > 0 ? Math.round((rejected / total) * 100) : 0;
-    const pendingPercent = total > 0 ? Math.round((pending / total) * 100) : 0;
-
-    return {
-      chart: [
-        { name: `Selesai (${finishedPercent}%)`, value: finished, color: '#10b981' },
-        { name: `Ditolak (${rejectedPercent}%)`, value: rejected, color: '#ef4444' },
-        { name: `Proses (${pendingPercent}%)`, value: pending, color: '#f59e0b' }
-      ],
-      total,
-      finished,
-      rejected,
-      pending
-    };
-  }, [filteredRequests]);
-
-  const polresSummary = useMemo(() => {
-    const kesatuanMap: Record<string, any> = {};
-    
-    filteredRequests.forEach(req => {
-      if (!kesatuanMap[req.kesatuan]) {
-        kesatuanMap[req.kesatuan] = {
-          name: req.kesatuan,
-          total: 0,
-          backlog: 0,
-          selesai: 0,
-          ditolak: 0,
-        };
-      }
-      kesatuanMap[req.kesatuan].total++;
-      if (req.status === RequestStatus.SELESAI) {
-        kesatuanMap[req.kesatuan].selesai++;
-      } else if (req.status === RequestStatus.DITOLAK) {
-        kesatuanMap[req.kesatuan].ditolak++;
-      } else {
-        kesatuanMap[req.kesatuan].backlog++;
-      }
-    });
-
-    return Object.values(kesatuanMap).map(item => ({
-      ...item,
-      ratio: item.total > 0 ? ((item.selesai / item.total) * 100).toFixed(1) : "0",
-      repeat: "2.4", 
-      avg: "1.2"     
-    }));
-  }, [filteredRequests]);
+  const { barData, pieData, polresSummary } = summaryData;
 
   const exportCSV = () => {
     const headers = ['Kesatuan', 'Total', 'Backlog', 'Selesai', 'Ditolak', 'Rasio %'];

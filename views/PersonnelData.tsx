@@ -6,15 +6,15 @@ import { useDebounce } from '../src/hooks/useDebounce';
 import { Personnel, UserRole, LogEntry, SiteSettings } from '../types';
 
 interface PersonnelDataProps {
-  personnel: Personnel[];
-  setPersonnel: React.Dispatch<React.SetStateAction<Personnel[]>>;
+  personnel?: Personnel[];
+  setPersonnel?: React.Dispatch<React.SetStateAction<Personnel[]>>;
   showToast: (msg: string, type?: 'success' | 'error') => void;
   addLog?: (aktivitas: LogEntry['aktivitas'], keterangan: string) => void;
   siteSettings: SiteSettings;
   currentUser: Personnel;
 }
 
-const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, showToast, addLog, siteSettings, currentUser }) => {
+const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel: _globalPersonnel, setPersonnel: _setGlobalPersonnel, showToast, addLog, siteSettings, currentUser }) => {
   const isDarkMode = siteSettings.darkMode;
   const isSuperAdmin = currentUser.role === UserRole.SUPERADMIN;
   const isAdminPolres = currentUser.role === UserRole.ADMIN;
@@ -22,6 +22,17 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [importType, setImportType] = useState<'excel' | 'csv' | null>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
+
+  // Local table state to avoid contaminating App.tsx global personnel state (Fase 6.4)
+  const [localPersonnel, setLocalPersonnel] = useState<Personnel[]>([]);
+  // Summary counts for stats badges directly from backend API (Fase 6.3)
+  const [summaryData, setSummaryData] = useState({
+    total: 0,
+    superAdmin: 0,
+    admin: 0,
+    user: 0,
+    active: 0
+  });
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -36,10 +47,10 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
 
   // Filter personnel based on role
   const visiblePersonnel = useMemo(() => {
-    if (isSuperAdmin) return personnel;
-    if (isAdminPolres) return personnel.filter(p => p.role === UserRole.USER);
+    if (isSuperAdmin) return localPersonnel;
+    if (isAdminPolres) return localPersonnel.filter(p => p.role === UserRole.USER);
     return [];
-  }, [personnel, isSuperAdmin, isAdminPolres]);
+  }, [localPersonnel, isSuperAdmin, isAdminPolres]);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeSearch, setActiveSearch] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -135,8 +146,11 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
       });
       const res = await fetch(`/api/personnel?${params.toString()}`, { credentials: 'include' });
       const result = await res.json();
-      setPersonnel(result.data);
-      setTotalItems(result.total);
+      setLocalPersonnel(result.data || []);
+      setTotalItems(result.total || 0);
+      if (result.summary) {
+        setSummaryData(result.summary);
+      }
     } catch (error) {
       console.error('Failed to fetch personnel:', error);
       showToast('Gagal mengambil data personel', 'error');
@@ -149,15 +163,16 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
     fetchPersonnel();
   }, [currentPage, itemsPerPage, activeSearch, filterRole, filterKesatuan]);
 
+  // Statistics badges populated directly from backend summary (Fase 6.3)
   const stats = useMemo(() => {
     return {
-      total: totalItems,
-      superAdmin: personnel.filter(p => p.role === UserRole.SUPERADMIN).length, // This is only for current page, maybe not ideal
-      admin: personnel.filter(p => p.role === UserRole.ADMIN).length,
-      user: personnel.filter(p => p.role === UserRole.USER).length,
-      active: personnel.filter(p => p.status === 'Aktif').length
+      total: summaryData.total || totalItems,
+      superAdmin: summaryData.superAdmin,
+      admin: summaryData.admin,
+      user: summaryData.user,
+      active: summaryData.active
     };
-  }, [personnel, totalItems]);
+  }, [summaryData, totalItems]);
 
   const handleImport = (type: 'excel' | 'csv') => {
     setImportType(type);
@@ -199,7 +214,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
           }
 
           // Check if NRP already exists in current personnel
-          if (personnel.some(p => p.nrp === nrp) || newPersonnel.some(p => p.nrp === nrp)) {
+          if (localPersonnel.some(p => p.nrp === nrp) || newPersonnel.some(p => p.nrp === nrp)) {
             skippedCount++;
             return;
           }
@@ -233,7 +248,8 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
             if (!res.ok) throw new Error('Bulk API failed');
             const result = await res.json();
             if (result.success) {
-              setPersonnel(prev => [...prev, ...newPersonnel]);
+              setLocalPersonnel(prev => [...prev, ...newPersonnel]);
+              fetchPersonnel();
               showToast(`Berhasil mengimpor ${newPersonnel.length} data.${skippedCount > 0 ? ` (${skippedCount} data dilewati)` : ''}`);
               addLog?.('Import Data', `Mengimpor ${newPersonnel.length} data personel via ${importType?.toUpperCase()}`);
             } else {
@@ -267,6 +283,22 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
   const [actionType, setActionType] = useState<'delete' | 'deactivate' | null>(null);
 
   const [selectedPersonnel, setSelectedPersonnel] = useState<Personnel | null>(null);
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Auto-fetch fresh personnel detail (including decrypted password for SuperAdmin) if not already loaded
+  useEffect(() => {
+    setShowPassword(false);
+    if (isSuperAdmin && selectedPersonnel?.id && !selectedPersonnel.password) {
+      fetch(`/api/personnel/${selectedPersonnel.id}`, { credentials: 'include' })
+        .then(res => res.json())
+        .then(result => {
+          if (result.success && result.data && result.data.password) {
+            setSelectedPersonnel(prev => prev && prev.id === selectedPersonnel.id ? { ...prev, password: result.data.password } : prev);
+          }
+        })
+        .catch(err => console.error('Failed to fetch personnel password:', err));
+    }
+  }, [selectedPersonnel?.id, isSuperAdmin]);
 
   const kesatuanList = useMemo(() => {
     if (allUnits.length > 0) {
@@ -307,6 +339,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
     setSortConfig(null);
     setCurrentPage(1);
     setSelectedPersonnel(null);
+    setShowPassword(false);
   };
 
   const handleManualSearch = () => {
@@ -321,7 +354,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
   };
 
   const handleDelete = (id: string) => {
-    const person = personnel.find(p => p.id === id);
+    const person = localPersonnel.find(p => p.id === id);
     if (person) {
       setActionTarget(person);
       setActionStep('choice');
@@ -337,7 +370,8 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
         const res = await fetch(`/api/personnel/${actionTarget.id}`, { method: 'DELETE', credentials: 'include' });
         if (!res.ok) throw new Error('Failed to delete');
         
-        setPersonnel(prev => prev.filter(p => p.id !== actionTarget.id));
+        setLocalPersonnel(prev => prev.filter(p => p.id !== actionTarget.id));
+        fetchPersonnel();
         showToast('Data personel berhasil dihapus.');
         addLog?.('Hapus Data', `Menghapus data personel: ${actionTarget.nama} (NRP: ${actionTarget.nrp})`);
       } else {
@@ -350,7 +384,8 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
         });
         if (!res.ok) throw new Error('Failed to update');
 
-        setPersonnel(prev => prev.map(p => p.id === actionTarget.id ? updatedPerson : p));
+        setLocalPersonnel(prev => prev.map(p => p.id === actionTarget.id ? updatedPerson : p));
+        fetchPersonnel();
         showToast('Status personel berhasil diubah menjadi Nonaktif.');
         addLog?.('Update Data', `Menonaktifkan personel: ${actionTarget.nama} (NRP: ${actionTarget.nrp})`);
       }
@@ -369,7 +404,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
     if (!formData.nama || !formData.nrp) return showToast('Nama dan NRP wajib diisi', 'error');
 
     const trimmedNrp = formData.nrp.trim();
-    const isNrpExists = personnel.some(p => p.nrp === trimmedNrp && p.id !== editingId);
+    const isNrpExists = localPersonnel.some(p => p.nrp === trimmedNrp && p.id !== editingId);
     if (isNrpExists) {
       return showToast(`Peringatan: NRP/NIP ${trimmedNrp} sudah terdaftar di dalam sistem! Silakan gunakan NRP lain atau periksa kembali data personel.`, 'error');
     }
@@ -399,7 +434,8 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
           throw new Error(errorData.message || 'Failed to update');
         }
 
-        setPersonnel(prev => prev.map(p => p.id === editingId ? { ...p, ...sanitizedData as Personnel } : p));
+        setLocalPersonnel(prev => prev.map(p => p.id === editingId ? { ...p, ...sanitizedData as Personnel } : p));
+        fetchPersonnel();
         showToast('Data berhasil diperbarui');
         addLog?.('Update Data', `Memperbarui data personel: ${formData.nama} (NRP: ${formData.nrp})`);
       } else {
@@ -429,7 +465,8 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
           throw new Error(errorData.message || 'Failed to create');
         }
 
-        setPersonnel(prev => [newPerson, ...prev]);
+        setLocalPersonnel(prev => [newPerson, ...prev]);
+        fetchPersonnel();
         showToast(`Personel baru ditambahkan. Password default: ${defaultPassword}`);
         addLog?.('Update Data', `Menambahkan personel baru: ${newPerson.nama} (NRP: ${newPerson.nrp})`);
       }
@@ -471,13 +508,13 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
             {isSuperAdmin ? 'Kelola data seluruh personel dan penetapan admin kesatuan.' : 'Kelola data seluruh user dalam sistem.'}
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3 w-full sm:w-auto">
           {/* Import Dropdown */}
           {!isAdminPolres && (
-            <div className="relative" ref={dropdownRef}>
+            <div className="relative flex-1 sm:flex-none" ref={dropdownRef}>
               <button 
                 onClick={() => setShowImportDropdown(!showImportDropdown)}
-                className={`px-4 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center gap-2 border-2 ${
+                className={`w-full sm:w-auto px-4 py-2.5 rounded-xl font-bold text-xs transition-all flex items-center justify-center gap-2 border-2 ${
                   isDarkMode ? 'border-slate-800 text-slate-400 hover:bg-slate-800' : 'border-slate-100 text-slate-500 hover:bg-slate-50'
                 }`}
               >
@@ -523,7 +560,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
           {!isAdminPolres && (
             <button 
               onClick={openAddModal}
-              className="bg-sky-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-sky-200 hover:bg-sky-700 transition-all flex items-center gap-2 active:scale-95"
+              className="flex-1 sm:flex-none bg-sky-600 text-white px-5 py-2.5 rounded-xl font-bold text-sm shadow-lg shadow-sky-200 hover:bg-sky-700 transition-all flex items-center justify-center gap-2 active:scale-95"
             >
               <span className="material-symbols-outlined text-lg">person_add</span>
               Tambah Personel
@@ -754,7 +791,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                   </tr>
                 </thead>
                 <tbody className={`divide-y transition-colors duration-300 ${isDarkMode ? 'divide-slate-800' : 'divide-slate-50'}`}>
-                  {personnel.map((p) => (
+                  {localPersonnel.map((p) => (
                     <tr 
                       key={p.id} 
                       onClick={() => setSelectedPersonnel(p)}
@@ -799,9 +836,12 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                       {isSuperAdmin && (
                         <td className="px-6 py-4">
                           <div className="flex items-center gap-1.5">
-                            <span className="material-symbols-outlined text-xs text-emerald-500">lock</span>
-                            <span className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-400' : 'text-slate-500'}`}>
-                              Terkunci (Bcrypt)
+                            <span className="material-symbols-outlined text-xs text-amber-500">vpn_key</span>
+                            <span className={`text-[10px] font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-600'}`}>
+                              AES-256
+                            </span>
+                            <span className="text-[9px] px-1.5 py-0.5 rounded bg-sky-500/10 text-sky-500 font-semibold ml-1">
+                              Lihat Detail
                             </span>
                           </div>
                         </td>
@@ -834,7 +874,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                       )}
                     </tr>
                   ))}
-                  {personnel.length === 0 && (
+                  {localPersonnel.length === 0 && (
                     <tr>
                       <td colSpan={isSuperAdmin ? 7 : 5} className="px-6 py-12 text-center text-slate-400 italic">Data tidak ditemukan.</td>
                     </tr>
@@ -858,7 +898,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                   </div>
                 ))
               ) : (
-                personnel.map((p) => (
+                localPersonnel.map((p) => (
                   <div 
                     key={p.id} 
                     onClick={() => setSelectedPersonnel(p)}
@@ -912,7 +952,7 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                   </div>
                 ))
               )}
-              {personnel.length === 0 && !isLoading && (
+              {localPersonnel.length === 0 && !isLoading && (
                 <div className="p-12 text-center">
                   <span className="material-symbols-outlined text-4xl opacity-20">database_off</span>
                   <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-2">Tidak ada data</p>
@@ -1012,9 +1052,9 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                 initial={{ opacity: 0, x: 20, y: 100 }}
                 animate={{ opacity: 1, x: 0, y: 0 }}
                 exit={{ opacity: 0, x: 20, y: 100 }}
-                className={`relative w-full rounded-t-[2.5rem] lg:rounded-[2.5rem] shadow-2xl border overflow-hidden flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
+                className={`relative w-full rounded-t-[2.5rem] lg:rounded-[2.5rem] shadow-2xl border overflow-hidden max-h-[90vh] lg:max-h-none flex flex-col transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}
               >
-                <div className="p-8 space-y-8">
+                <div className="p-5 sm:p-8 space-y-5 sm:space-y-8 overflow-y-auto">
                   <div className="flex items-center justify-between">
                     <div className={`text-[10px] font-black uppercase tracking-[0.2em] ${isDarkMode ? 'text-slate-500' : 'text-slate-400'}`}>Detail Personel</div>
                     <button 
@@ -1063,6 +1103,68 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                             {selectedPersonnel.role}
                           </span>
                         </div>
+                      </div>
+                    )}
+
+                    {isSuperAdmin && (
+                      <div className={`p-4 md:p-5 rounded-3xl border transition-colors ${
+                        isDarkMode ? 'bg-amber-500/5 border-amber-500/20' : 'bg-amber-50/60 border-amber-200/60'
+                      }`}>
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-1.5">
+                            <span className="material-symbols-outlined text-sm text-amber-500">vpn_key</span>
+                            <span className="text-[8px] md:text-[10px] font-black text-amber-600 dark:text-amber-400 uppercase tracking-widest">
+                              Kata Sandi Akun (Khusus SuperAdmin)
+                            </span>
+                          </div>
+                          <span className="text-[9px] font-bold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 dark:text-emerald-400">
+                            AES-256 GCM
+                          </span>
+                        </div>
+
+                        <div className={`flex items-center justify-between p-3 rounded-2xl border ${
+                          isDarkMode ? 'bg-slate-800/80 border-slate-700' : 'bg-white border-slate-200'
+                        }`}>
+                          <div className="font-mono text-xs md:text-sm font-bold tracking-wider select-all overflow-hidden text-ellipsis mr-2 text-slate-800 dark:text-slate-100">
+                            {showPassword ? (selectedPersonnel.password || '(Belum diset)') : '••••••••••••'}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => setShowPassword(!showPassword)}
+                              title={showPassword ? 'Sembunyikan Kata Sandi' : 'Lihat Kata Sandi'}
+                              className={`p-2 rounded-xl transition-all ${
+                                isDarkMode 
+                                  ? 'text-slate-400 hover:text-white hover:bg-slate-700' 
+                                  : 'text-slate-500 hover:text-slate-800 hover:bg-slate-100'
+                              }`}
+                            >
+                              <span className="material-symbols-outlined text-lg">
+                                {showPassword ? 'visibility_off' : 'visibility'}
+                              </span>
+                            </button>
+                            {selectedPersonnel.password && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  navigator.clipboard.writeText(selectedPersonnel.password || '');
+                                  showToast('Kata sandi berhasil disalin ke clipboard!');
+                                }}
+                                title="Salin Kata Sandi"
+                                className={`p-2 rounded-xl transition-all ${
+                                  isDarkMode 
+                                    ? 'text-slate-400 hover:text-sky-400 hover:bg-sky-500/10' 
+                                    : 'text-slate-500 hover:text-sky-600 hover:bg-sky-50'
+                                }`}
+                              >
+                                <span className="material-symbols-outlined text-lg">content_copy</span>
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                        <p className="text-[9px] text-slate-400 mt-2 italic">
+                          * Akses terbatas hanya untuk Super Administrator guna verifikasi dan otorisasi akun.
+                        </p>
                       </div>
                     )}
                   </div>
@@ -1176,31 +1278,32 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
 
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 z-[500] flex items-end md:items-center justify-center md:p-4 bg-black/70 backdrop-blur-md">
+          <div className="fixed inset-0 z-[500] flex items-end md:items-center justify-center p-0 md:p-4 bg-black/70 backdrop-blur-md">
             <motion.div 
               initial={{ opacity: 0, scale: 0.9, y: 100 }}
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={{ opacity: 0, scale: 0.9, y: 100 }}
-              className={`rounded-t-[2.5rem] md:rounded-[2.5rem] w-full max-w-2xl overflow-hidden shadow-2xl transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}
+              className={`rounded-t-[2.5rem] md:rounded-[2.5rem] w-full max-w-2xl max-h-[92vh] md:max-h-[90vh] flex flex-col overflow-hidden shadow-2xl transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}
             >
-              <div className={`p-8 border-b flex items-center justify-between transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/50 border-slate-100'}`}>
-                <div className="flex items-center gap-4">
-                  <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isDarkMode ? 'bg-sky-500/10 text-sky-400' : 'bg-sky-50 text-sky-600'}`}>
-                    <span className="material-symbols-outlined text-3xl">{editingId ? 'edit_square' : 'person_add'}</span>
+              <div className={`p-5 sm:p-8 border-b flex items-center justify-between shrink-0 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/50 border-slate-100'}`}>
+                <div className="flex items-center gap-3 sm:gap-4">
+                  <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 ${isDarkMode ? 'bg-sky-500/10 text-sky-400' : 'bg-sky-50 text-sky-600'}`}>
+                    <span className="material-symbols-outlined text-2xl sm:text-3xl">{editingId ? 'edit_square' : 'person_add'}</span>
                   </div>
                   <div>
-                    <h3 className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+                    <h3 className={`text-lg sm:text-xl font-black ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
                       {editingId ? 'Edit Data Personel' : 'Tambah Personel Baru'}
                     </h3>
                     <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-0.5">Lengkapi informasi data anggota</p>
                   </div>
                 </div>
-                <button onClick={() => setIsModalOpen(false)} className={`p-3 rounded-full transition-all ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-800'}`}>
+                <button onClick={() => setIsModalOpen(false)} className={`p-2.5 sm:p-3 rounded-full transition-all ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-400 hover:bg-slate-100 hover:text-slate-800'}`}>
                   <span className="material-symbols-outlined">close</span>
                 </button>
               </div>
               
-              <form onSubmit={handleSave} className="p-8 space-y-6 overflow-y-auto max-h-[calc(100vh-200px)] scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700">
+              <form onSubmit={handleSave} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+                <div className="p-5 sm:p-8 space-y-5 sm:space-y-6 overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700">
                 {formError && (
                   <motion.div 
                     initial={{ opacity: 0, y: -10 }}
@@ -1387,19 +1490,21 @@ const PersonnelData: React.FC<PersonnelDataProps> = ({ personnel, setPersonnel, 
                     </select>
                   </div>
                 </div>
+              </div>
 
-                <div className="pt-6 flex items-center justify-end gap-4 border-t border-slate-100 dark:border-slate-800">
+                {/* STICKY FOOTER ACTION: Selalu terlihat di bawah tanpa terpotong */}
+                <div className="p-4 sm:p-6 md:px-8 md:py-5 border-t border-slate-100 dark:border-slate-800 shrink-0 bg-slate-50/70 dark:bg-slate-900/90 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-3 sm:gap-4">
                   <button 
                     type="button" 
                     onClick={() => setIsModalOpen(false)}
-                    className={`px-8 py-4 rounded-2xl font-black transition-all text-xs uppercase tracking-widest ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`}
+                    className={`px-6 sm:px-8 py-3.5 sm:py-4 rounded-2xl font-black transition-all text-xs uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`}
                   >
                     Batal
                   </button>
                   <button 
                     type="submit"
                     disabled={!formData.nama || !formData.nrp}
-                    className={`px-10 py-4 bg-sky-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-sky-700 shadow-2xl shadow-sky-200/20 transition-all active:scale-95 ${(!formData.nama || !formData.nrp) ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    className={`px-8 sm:px-10 py-3.5 sm:py-4 bg-sky-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-sky-700 shadow-2xl shadow-sky-200/20 transition-all active:scale-95 flex items-center justify-center ${(!formData.nama || !formData.nrp) ? 'opacity-50 cursor-not-allowed' : ''}`}
                   >
                     {editingId ? 'Simpan Perubahan' : 'Tambah Personel'}
                   </button>

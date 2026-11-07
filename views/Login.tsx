@@ -18,10 +18,11 @@ const Login: React.FC<LoginProps> = ({ onLogin, addLog, siteSettings, currentUse
   const [redirectToDashboard, setRedirectToDashboard] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // MFA States
+  // MFA States (Fase 9.4: tempToken signed JWT)
   const [showMfaForm, setShowMfaForm] = useState(false);
   const [mfaCode, setMfaCode] = useState('');
   const [userIdentifier, setUserIdentifier] = useState('');
+  const [tempToken, setTempToken] = useState('');
   const [mfaMessage, setMfaMessage] = useState('');
 
   // Redirect if already logged in
@@ -43,14 +44,14 @@ const Login: React.FC<LoginProps> = ({ onLogin, addLog, siteSettings, currentUse
       const data = await res.json();
       
       if (data.success && data.mfa_required) {
-        // Show MFA Form instead of logging in directly
+        // Show MFA Form with tempToken (Sequence Diagram Fig 3.10)
         setUserIdentifier(data.identifier);
+        setTempToken(data.tempToken || '');
         setMfaMessage(data.message);
         setShowMfaForm(true);
       } else if (data.success) {
         // Fallback if MFA is somehow bypassed by backend
         onLogin(data.user);
-        if (addLog) addLog('Login', `Pengguna ${data.user.nama} berhasil masuk ke sistem`);
         setRedirectToDashboard(true);
       } else {
         setError(data.message || 'Akses ditolak. Email atau kata sandi tidak valid.');
@@ -72,14 +73,13 @@ const Login: React.FC<LoginProps> = ({ onLogin, addLog, siteSettings, currentUse
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify({ identifier: userIdentifier, code: mfaCode })
+        body: JSON.stringify({ identifier: userIdentifier, code: mfaCode, tempToken })
       });
       
       const data = await res.json();
       
       if (data.success) {
         onLogin(data.user);
-        if (addLog) addLog('Login', `Pengguna ${data.user.nama} berhasil masuk ke sistem dengan MFA`);
         setRedirectToDashboard(true);
       } else {
         setError(data.message || 'Kode OTP tidak valid atau sudah kadaluarsa.');

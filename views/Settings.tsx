@@ -96,6 +96,7 @@ const Settings: React.FC<SettingsProps> = ({
       const res = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(newSettings)
       });
 
@@ -234,18 +235,18 @@ const Settings: React.FC<SettingsProps> = ({
       
       {/* SECTION: Identitas Website (HANYA UNTUK SUPER ADMIN) */}
       {isSuperAdmin && (
-        <div className={`rounded-[2.5rem] shadow-sm border overflow-hidden transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
-          <div className={`p-8 flex items-center gap-4 transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-800/50' : 'bg-slate-50/50'}`}>
-            <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center">
+        <div className={`rounded-3xl sm:rounded-[2.5rem] shadow-sm border overflow-hidden transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
+          <div className={`p-5 sm:p-8 flex items-center gap-4 transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-800/50' : 'bg-slate-50/50'}`}>
+            <div className="w-12 h-12 rounded-2xl bg-sky-50 text-sky-600 flex items-center justify-center shrink-0">
               <span className="material-symbols-outlined text-3xl">language</span>
             </div>
             <div>
-              <h3 className={`font-black text-lg ${siteSettings.darkMode ? 'text-white' : 'text-slate-800'}`}>Identitas Website & Login</h3>
-              <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Branding & Penamaan Halaman Utama (Pusat)</p>
+              <h3 className={`font-black text-base sm:text-lg ${siteSettings.darkMode ? 'text-white' : 'text-slate-800'}`}>Identitas Website & Login</h3>
+              <p className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-widest">Branding & Penamaan Halaman Utama (Pusat)</p>
             </div>
           </div>
 
-          <form onSubmit={handleUpdateSite} className="p-8 space-y-10">
+          <form onSubmit={handleUpdateSite} className="p-5 sm:p-8 space-y-6 sm:space-y-10">
             <div className="flex flex-col md:flex-row gap-10 items-start">
               <div className="flex flex-col items-center gap-4">
                 <div className={`w-32 h-32 rounded-3xl border-2 border-dashed flex items-center justify-center overflow-hidden group relative shadow-inner transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-200'}`}>
@@ -385,7 +386,7 @@ const Settings: React.FC<SettingsProps> = ({
                 </div>
 
                 <div className="flex justify-end pt-4">
-                  <button type="submit" className="px-10 py-4 bg-sky-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-sky-100 hover:bg-sky-700 transition-all active:scale-95">
+                  <button type="submit" className="w-full sm:w-auto px-6 sm:px-10 py-3.5 sm:py-4 bg-sky-600 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest shadow-xl shadow-sky-100 hover:bg-sky-700 transition-all active:scale-95 text-center">
                     Simpan Perubahan Website
                   </button>
                 </div>
@@ -396,20 +397,20 @@ const Settings: React.FC<SettingsProps> = ({
       )}
 
       {/* SECTION: Profil Pribadi */}
-      <div className={`rounded-[2.5rem] shadow-sm border overflow-hidden transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
-        <div className={`p-8 flex items-center gap-4 transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-800/50' : 'bg-slate-50/50'}`}>
-          <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center">
+      <div className={`rounded-3xl sm:rounded-[2.5rem] shadow-sm border overflow-hidden transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
+        <div className={`p-5 sm:p-8 flex items-center gap-4 transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-800/50' : 'bg-slate-50/50'}`}>
+          <div className="w-12 h-12 rounded-2xl bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-3xl">badge</span>
           </div>
           <div>
-            <h3 className={`font-black text-lg ${siteSettings.darkMode ? 'text-white' : 'text-slate-800'}`}>
+            <h3 className={`font-black text-base sm:text-lg ${siteSettings.darkMode ? 'text-white' : 'text-slate-800'}`}>
               {isSuperAdmin ? 'Profil Super Admin' : isAdminPolres ? 'Profil Admin Polres' : 'Profil Personel'}
             </h3>
-            <p className="text-xs text-slate-400 font-bold uppercase tracking-widest">Identitas Akun & Jabatan</p>
+            <p className="text-[10px] sm:text-xs text-slate-400 font-bold uppercase tracking-widest">Identitas Akun & Jabatan</p>
           </div>
         </div>
 
-        <form onSubmit={handleUpdateAdminProfile} className="p-8 space-y-10">
+        <form onSubmit={handleUpdateAdminProfile} className="p-5 sm:p-8 space-y-6 sm:space-y-10">
           <div className="flex flex-col md:flex-row gap-10 items-start">
             <div className="flex flex-col items-center gap-4">
               <div className={`w-40 h-40 rounded-[2rem] border-4 shadow-xl flex items-center justify-center overflow-hidden group relative transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-100 border-white'}`}>
@@ -518,7 +519,7 @@ const Settings: React.FC<SettingsProps> = ({
             <button 
               type="submit" 
               disabled={isUpdatingProfile}
-              className={`px-8 py-4 bg-indigo-600 text-white rounded-2xl font-black text-sm uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 flex items-center gap-2 ${isUpdatingProfile ? 'opacity-60 cursor-not-allowed' : ''}`}
+              className={`w-full sm:w-auto px-6 sm:px-8 py-3.5 sm:py-4 bg-indigo-600 text-white rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest shadow-xl shadow-indigo-100 hover:bg-indigo-700 transition-all active:scale-95 flex items-center justify-center gap-2 ${isUpdatingProfile ? 'opacity-60 cursor-not-allowed' : ''}`}
             >
               {isUpdatingProfile ? 'Menyimpan...' : 'Perbarui Profil'}
             </button>
@@ -527,15 +528,15 @@ const Settings: React.FC<SettingsProps> = ({
       </div>
 
       {/* SECTION: Keamanan & Password */}
-      <div className={`rounded-[2.5rem] shadow-sm border overflow-hidden transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
-        <div className={`p-8 flex items-center gap-4 transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-800/50' : 'bg-slate-50/50'}`}>
-          <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center">
+      <div className={`rounded-3xl sm:rounded-[2.5rem] shadow-sm border overflow-hidden transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-900 border-slate-800' : 'bg-white border-slate-100'}`}>
+        <div className={`p-5 sm:p-8 flex items-center gap-4 transition-colors duration-300 ${siteSettings.darkMode ? 'bg-slate-800/50' : 'bg-slate-50/50'}`}>
+          <div className="w-10 h-10 rounded-xl bg-orange-50 text-orange-600 flex items-center justify-center shrink-0">
             <span className="material-symbols-outlined text-2xl">shield</span>
           </div>
           <h3 className={`font-black ${siteSettings.darkMode ? 'text-white' : 'text-slate-800'}`}>Keamanan & Password</h3>
         </div>
         
-        <form onSubmit={handlePasswordUpdate} className="p-8 space-y-8">
+        <form onSubmit={handlePasswordUpdate} className="p-5 sm:p-8 space-y-6 sm:space-y-8">
           <div className="space-y-6 max-w-2xl">
             <div className="space-y-2">
               <label className="text-xs font-black text-slate-400 uppercase tracking-widest pl-1">Password Saat Ini</label>
@@ -619,13 +620,15 @@ const Settings: React.FC<SettingsProps> = ({
                 />
               </div>
             </div>
-            <button 
-              type="submit"
-              disabled={isUpdatingPassword}
-              className={`px-8 py-4 bg-slate-900 text-white rounded-2xl font-black text-sm uppercase tracking-widest hover:bg-slate-800 transition-all shadow-xl shadow-slate-200 flex items-center gap-2 ${isUpdatingPassword ? 'opacity-60 cursor-not-allowed' : ''}`}
-            >
-              {isUpdatingPassword ? 'Menyimpan...' : 'Perbarui Password'}
-            </button>
+            <div className="flex justify-end pt-2">
+              <button 
+                type="submit"
+                disabled={isUpdatingPassword}
+                className={`w-full sm:w-auto px-6 sm:px-8 py-3.5 sm:py-4 bg-slate-900 text-white dark:bg-white dark:text-slate-900 rounded-2xl font-black text-xs sm:text-sm uppercase tracking-widest hover:bg-slate-800 dark:hover:bg-slate-100 transition-all shadow-xl shadow-slate-200 dark:shadow-none flex items-center justify-center gap-2 ${isUpdatingPassword ? 'opacity-60 cursor-not-allowed' : ''}`}
+              >
+                {isUpdatingPassword ? 'Menyimpan...' : 'Perbarui Password'}
+              </button>
+            </div>
           </div>
         </form>
       </div>

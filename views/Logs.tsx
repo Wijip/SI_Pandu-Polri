@@ -298,12 +298,12 @@ const Logs: React.FC<LogsProps> = ({ logs, showToast, siteSettings }) => {
       {/* FILTER MODAL (MOBILE) */}
       {isFilterModalOpen && (
         <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-900/60 backdrop-blur-sm">
-          <div className={`w-full max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl overflow-hidden transition-colors ${
+          <div className={`w-full max-w-lg rounded-t-3xl sm:rounded-3xl shadow-2xl max-h-[90vh] overflow-y-auto transition-colors ${
             isDarkMode ? 'bg-slate-900' : 'bg-white'
           }`}>
-            <div className="p-6 space-y-6">
+            <div className="p-5 sm:p-6 space-y-5 sm:space-y-6">
               <div className="flex items-center justify-between">
-                <h3 className={`text-xl font-black ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Filter Log</h3>
+                <h3 className={`text-lg sm:text-xl font-black ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Filter Log</h3>
                 <button onClick={() => setIsFilterModalOpen(false)} className="p-2 text-slate-400 hover:text-rose-500 transition-colors">
                   <span className="material-symbols-outlined">close</span>
                 </button>
@@ -326,7 +326,7 @@ const Logs: React.FC<LogsProps> = ({ logs, showToast, siteSettings }) => {
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <div className="space-y-2">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Dari Tanggal</label>
                     <input 
@@ -334,7 +334,7 @@ const Logs: React.FC<LogsProps> = ({ logs, showToast, siteSettings }) => {
                       className={`w-full px-4 py-3 border rounded-xl text-sm font-bold focus:outline-none transition-colors ${
                         isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-white border-slate-200 text-slate-600'
                       }`}
-                      value={startDate}
+                      value={startDate} 
                       onChange={(e) => setStartDate(e.target.value)}
                     />
                   </div>
@@ -352,7 +352,7 @@ const Logs: React.FC<LogsProps> = ({ logs, showToast, siteSettings }) => {
                 </div>
               </div>
 
-              <div className="flex gap-3 pt-4">
+              <div className="flex gap-3 pt-2">
                 <button 
                   onClick={() => { setSearchTerm(''); setTypeFilter('Semua'); setStartDate(''); setEndDate(''); }}
                   className={`flex-1 py-3.5 rounded-xl font-bold text-sm transition-all ${

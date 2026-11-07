@@ -1,5 +1,5 @@
 
-import React, { useState, useEffect, useCallback, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useCallback, useLayoutEffect, Suspense } from 'react';
 import { HashRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import { 
@@ -12,17 +12,18 @@ import {
   LogEntry,
   RequestPriority
 } from './types';
-import Dashboard from './views/Dashboard';
-import ResetRequests from './views/ResetRequests';
-import PersonnelData from './views/PersonnelData';
-import Reports from './views/Reports';
-import Logs from './views/Logs';
-import Settings from './views/Settings';
-import Login from './views/Login';
-import UserDashboard from './views/UserDashboard';
 import Sidebar from './components/Sidebar';
 import MobileTopbar from './components/MobileTopbar';
 import Toast from './components/Toast';
+
+// Fase 8.5: Code Splitting via React.lazy for route-based views
+const Dashboard = React.lazy(() => import('./views/Dashboard'));
+const ResetRequests = React.lazy(() => import('./views/ResetRequests'));
+const PersonnelData = React.lazy(() => import('./views/PersonnelData'));
+const Reports = React.lazy(() => import('./views/Reports'));
+const Logs = React.lazy(() => import('./views/Logs'));
+const Settings = React.lazy(() => import('./views/Settings'));
+const Login = React.lazy(() => import('./views/Login'));
 
 const ProtectedRoute: React.FC<React.PropsWithChildren<{ 
   currentUser: Personnel | null, 
@@ -102,14 +103,12 @@ const App: React.FC = () => {
     fetchSettings();
   }, []);
 
-  // Fetch initial data from API
+  // Fetch initial data from API (Fase 8.3: Eliminasi duplicate requests?limit=all & personnel?limit=all)
   useEffect(() => {
     const fetchData = async () => {
       try {
         const fetchTasks: Promise<Response>[] = [
-          fetch('/api/stats', { credentials: 'include' }),
-          fetch('/api/requests?limit=all', { credentials: 'include' }),
-          fetch('/api/personnel?limit=all', { credentials: 'include' })
+          fetch('/api/stats', { credentials: 'include' })
         ];
         
         const isSuperAdmin = currentUser?.role === UserRole.SUPERADMIN;
@@ -119,22 +118,8 @@ const App: React.FC = () => {
 
         const results = await Promise.all(fetchTasks);
         const sRes = results[0];
-        const rRes = results[1];
-        const pRes = results[2];
-        const lRes = isSuperAdmin ? results[3] : null;
+        const lRes = isSuperAdmin ? results[1] : null;
         
-        if (rRes && rRes.ok) {
-          const rData = await rRes.json();
-          if (rData && Array.isArray(rData.data)) {
-            setRequests(rData.data);
-          }
-        }
-        if (pRes && pRes.ok) {
-          const pData = await pRes.json();
-          if (pData && Array.isArray(pData.data)) {
-            setPersonnel(pData.data);
-          }
-        }
         if (lRes && lRes.ok) setLogs(await lRes.json());
         if (sRes && sRes.ok) {
           await sRes.json();
@@ -153,7 +138,8 @@ const App: React.FC = () => {
 
   // Socket.io Integration
   useEffect(() => {
-    const socket = io();
+    if (!currentUser) return;
+    const socket = io({ withCredentials: true });
 
     socket.on('urgent_request', (data) => {
       if (currentUser && (currentUser.role === UserRole.SUPERADMIN || currentUser.role === UserRole.ADMIN)) {
@@ -277,72 +263,78 @@ const App: React.FC = () => {
         )}
 
         <div className={`flex-1 flex flex-col min-w-0 ${currentUser ? 'pt-14 md:pt-0' : ''}`}>
-          <Routes>
-            <Route path="/login" element={<Login onLogin={(user) => { setCurrentUser(user); }} addLog={addLog} siteSettings={siteSettings} currentUser={currentUser} />} />
-            
-            <Route path="/" element={
-              <ProtectedRoute currentUser={currentUser}>
-                {(currentUser?.role === UserRole.SUPERADMIN || currentUser?.role === UserRole.ADMIN) ? (
-                  <Dashboard requests={requests} personnel={personnel} showToast={showToast} currentUser={currentUser!} siteSettings={siteSettings} />
-                ) : (
-                  <Navigate to="/requests" replace />
-                )}
-              </ProtectedRoute>
-            } />
-            
-            <Route path="/requests" element={
-              <ProtectedRoute anyAdminOnly allowUser currentUser={currentUser}>
-                <ResetRequests 
-                  showToast={showToast}
-                  addNotification={addNotification}
-                  addLog={addLog}
-                  siteSettings={siteSettings}
-                  setSiteSettings={setSiteSettings}
-                  currentUser={currentUser as Personnel}
-                />
-              </ProtectedRoute>
-            } />
-            
-            <Route path="/personnel" element={
-              <ProtectedRoute anyAdminOnly currentUser={currentUser}>
-                <PersonnelData 
-                  personnel={personnel} 
-                  setPersonnel={setPersonnel} 
-                  showToast={showToast}
-                  addLog={addLog}
-                  siteSettings={siteSettings}
-                  currentUser={currentUser as Personnel}
-                />
-              </ProtectedRoute>
-            } />
+          <Suspense fallback={
+            <div className="flex-1 flex items-center justify-center min-h-[60vh]">
+              <div className="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+            </div>
+          }>
+            <Routes>
+              <Route path="/login" element={<Login onLogin={(user) => { setCurrentUser(user); }} addLog={addLog} siteSettings={siteSettings} currentUser={currentUser} />} />
+              
+              <Route path="/" element={
+                <ProtectedRoute currentUser={currentUser}>
+                  {(currentUser?.role === UserRole.SUPERADMIN || currentUser?.role === UserRole.ADMIN) ? (
+                    <Dashboard requests={requests} personnel={personnel} showToast={showToast} currentUser={currentUser!} siteSettings={siteSettings} />
+                  ) : (
+                    <Navigate to="/requests" replace />
+                  )}
+                </ProtectedRoute>
+              } />
+              
+              <Route path="/requests" element={
+                <ProtectedRoute anyAdminOnly allowUser currentUser={currentUser}>
+                  <ResetRequests 
+                    showToast={showToast}
+                    addNotification={addNotification}
+                    addLog={addLog}
+                    siteSettings={siteSettings}
+                    setSiteSettings={setSiteSettings}
+                    currentUser={currentUser as Personnel}
+                  />
+                </ProtectedRoute>
+              } />
+              
+              <Route path="/personnel" element={
+                <ProtectedRoute anyAdminOnly currentUser={currentUser}>
+                  <PersonnelData 
+                    personnel={personnel} 
+                    setPersonnel={setPersonnel} 
+                    showToast={showToast}
+                    addLog={addLog}
+                    siteSettings={siteSettings}
+                    currentUser={currentUser as Personnel}
+                  />
+                </ProtectedRoute>
+              } />
 
-            <Route path="/reports" element={
-              <ProtectedRoute anyAdminOnly currentUser={currentUser}>
-                <Reports requests={requests} showToast={showToast} siteSettings={siteSettings} currentUser={currentUser as Personnel} />
-              </ProtectedRoute>
-            } />
+              <Route path="/reports" element={
+                <ProtectedRoute anyAdminOnly currentUser={currentUser}>
+                  <Reports requests={requests} showToast={showToast} siteSettings={siteSettings} currentUser={currentUser as Personnel} />
+                </ProtectedRoute>
+              } />
 
-            <Route path="/logs" element={
-              <ProtectedRoute superAdminOnly currentUser={currentUser}>
-                <Logs logs={logs} showToast={showToast} siteSettings={siteSettings} />
-              </ProtectedRoute>
-            } />
-            
-            <Route path="/settings" element={
-              <ProtectedRoute anyAdminOnly allowUser currentUser={currentUser}>
-                <Settings 
-                  siteSettings={siteSettings} 
-                  setSiteSettings={setSiteSettings} 
-                  currentUser={currentUser as Personnel}
-                  setCurrentUser={setCurrentUser}
-                  showToast={showToast}
-                  addLog={addLog}
-                />
-              </ProtectedRoute>
-            } />
-            
-            <Route path="*" element={<Navigate to="/" replace />} />
-          </Routes>
+              <Route path="/logs" element={
+                <ProtectedRoute superAdminOnly currentUser={currentUser}>
+                  <Logs logs={logs} showToast={showToast} siteSettings={siteSettings} />
+                </ProtectedRoute>
+              } />
+              
+              <Route path="/settings" element={
+                <ProtectedRoute anyAdminOnly allowUser currentUser={currentUser}>
+                  <Settings 
+                    siteSettings={siteSettings} 
+                    setSiteSettings={setSiteSettings} 
+                    currentUser={currentUser as Personnel}
+                    setCurrentUser={setCurrentUser}
+                    showToast={showToast}
+                    addLog={addLog}
+                  />
+                </ProtectedRoute>
+              } />
+              
+              <Route path="*" element={<Navigate to="/" replace />} />
+            </Routes>
+          </Suspense>
         </div>
 
         <div className="fixed top-4 right-4 z-[100] flex flex-col gap-2 pointer-events-none print:hidden">

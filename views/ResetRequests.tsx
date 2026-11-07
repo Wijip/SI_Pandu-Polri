@@ -122,6 +122,42 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
     prioritas: 'Bukan Prioritas',
     catatan: ''
   });
+  const [manualKtaFile, setManualKtaFile] = useState<File | null>(null);
+  const [manualKtaPreview, setManualKtaPreview] = useState<string | null>(null);
+  const manualKtaInputRef = useRef<HTMLInputElement>(null);
+
+  const handleKtaChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    if (file.size > 2 * 1024 * 1024) {
+      showToast('Ukuran file KTA melebihi batas maksimal 2MB', 'error');
+      if (manualKtaInputRef.current) manualKtaInputRef.current.value = '';
+      return;
+    }
+
+    const allowed = ['image/jpeg', 'image/png', 'application/pdf'];
+    if (!allowed.includes(file.type)) {
+      showToast('Format file KTA harus berupa JPG, PNG, atau PDF', 'error');
+      if (manualKtaInputRef.current) manualKtaInputRef.current.value = '';
+      return;
+    }
+
+    setManualKtaFile(file);
+    if (file.type.startsWith('image/')) {
+      const reader = new FileReader();
+      reader.onload = () => setManualKtaPreview(reader.result as string);
+      reader.readAsDataURL(file);
+    } else {
+      setManualKtaPreview(null);
+    }
+  };
+
+  const handleRemoveKta = () => {
+    setManualKtaFile(null);
+    setManualKtaPreview(null);
+    if (manualKtaInputRef.current) manualKtaInputRef.current.value = '';
+  };
 
   // Helper untuk Label Status Dinamis
   const getStatusLabel = (status: RequestStatus) => {
@@ -423,68 +459,62 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
             continue;
           }
 
-          const existingNama = await validateNRP(nrp, nama);
-          if (existingNama) {
-            errors.push({ row: i + 2, nrp, nama, existingNama });
-          } else {
-            validRequests.push({
-              id: `IMP-${Date.now()}-${i}`,
-              nama: nama || 'Tanpa Nama',
-              pangkat: pangkat,
-              nrp: nrp,
-              jabatan: jabatan,
-              kesatuan: kesatuan,
-              waktu_iso: new Date().toISOString(),
-              status: RequestStatus.MENUNGGU,
-              alasan: alasan_val,
-              catatan: catatan,
-              createdAt: Date.now(),
-              kontak_person: String(item.Kontak || item.kontak || item.kontak_person || item.KONTAK || '-').trim(),
-              prioritas: prioritas_val as RequestPriority
-            });
-          }
+          // Fase 8.2: Validation delegated to server batch import transaction (no sequential HTTP round-trips)
+          validRequests.push({
+            id: `IMP-${Date.now()}-${i}`,
+            nama: nama || 'Tanpa Nama',
+            pangkat: pangkat,
+            nrp: nrp,
+            jabatan: jabatan,
+            kesatuan: kesatuan,
+            waktu_iso: new Date().toISOString(),
+            status: RequestStatus.MENUNGGU,
+            alasan: alasan_val,
+            catatan: catatan,
+            createdAt: Date.now(),
+            kontak_person: String(item.Kontak || item.kontak || item.kontak_person || item.KONTAK || '-').trim(),
+            prioritas: prioritas_val as RequestPriority,
+            row: i + 2
+          } as any);
         }
 
         if (errors.length > 0) {
           setImportErrors(errors);
         }
 
+        // Fase 8.1: Single atomic batch import endpoint (no Promise.all HTTP flooding)
         if (validRequests.length > 0) {
           try {
-            const results = await Promise.all(validRequests.map(async (r, idx) => {
-              const res = await fetch('/api/requests', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                credentials: 'include',
-                body: JSON.stringify(r)
-              });
-              const data = await res.json();
-              return { ok: res.ok, data, r, row: idx + 2 }; // Simplified row tracking for now
-            }));
+            const res = await fetch('/api/requests/import', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              credentials: 'include',
+              body: JSON.stringify({ items: validRequests })
+            });
+            const data = await res.json();
 
-            const failed = results.filter(res => !res.ok);
-            const succeeded = results.filter(res => res.ok);
+            if (res.ok && data.success) {
+              const combinedErrors = [...errors, ...(data.errors || [])];
+              if (combinedErrors.length > 0) {
+                setImportErrors(combinedErrors);
+              }
 
-            if (failed.length > 0) {
-              const newErrors = failed.map(f => ({
-                row: f.row, // This might be wrong if we skipped rows, but it's a start
-                nrp: f.r.nrp,
-                nama: f.r.nama,
-                existingNama: f.data.message || 'Gagal menyimpan'
-              }));
-              setImportErrors(prev => [...prev, ...newErrors]);
-            }
+              if (data.imported > 0) {
+                showToast(`${data.imported} data berhasil diimport`);
+                addLog?.('Sistem', `Melakukan import massal sebanyak ${data.imported} data`);
+              }
 
-            if (succeeded.length > 0) {
-              setRequests(prev => [...succeeded.map(s => s.r), ...prev]);
-              showToast(`${succeeded.length} data berhasil diimport`);
-              addLog?.('Sistem', `Melakukan import massal sebanyak ${succeeded.length} data`);
-            }
+              if (data.errors && data.errors.length > 0) {
+                showToast(`${data.errors.length} data ditolak karena validasi server`, 'error');
+              }
 
-            if (failed.length === 0) {
-              setIsImportModalOpen(false);
-              setSelectedFile(null);
+              if ((!data.errors || data.errors.length === 0) && errors.length === 0) {
+                setIsImportModalOpen(false);
+                setSelectedFile(null);
+              }
               fetchRequests();
+            } else {
+              showToast(data.message || 'Gagal menyimpan data import ke server', 'error');
             }
           } catch (err) {
             console.error('Import save failed:', err);
@@ -521,30 +551,54 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
 
     setIsSubmittingManual(true);
     const prioritas_val = manualForm.prioritas === 'Prioritas Mendesak' ? RequestPriority.MENDESAK : RequestPriority.NORMAL;
+    const reqId = `REQ-MAN-${Math.floor(1000 + Math.random() * 8999)}`;
 
-    const newReq: ResetRequest = {
-      id: `REQ-MAN-${Math.floor(1000 + Math.random() * 8999)}`,
-      nama: manualForm.nama.trim(),
-      pangkat: manualForm.pangkat.trim(),
-      nrp: manualForm.nrp.trim(),
-      jabatan: manualForm.jabatan.trim(),
-      kesatuan: manualForm.kesatuan.trim(),
-      prioritas: prioritas_val,
-      catatan: manualForm.catatan.trim(),
-      waktu_iso: new Date().toISOString(),
-      status: RequestStatus.MENUNGGU,
-      alasan: 'Input Manual Admin',
-      createdAt: Date.now()
-    };
+    const formData = new FormData();
+    formData.append('id', reqId);
+    formData.append('nama', manualForm.nama.trim());
+    formData.append('pangkat', manualForm.pangkat.trim());
+    formData.append('nrp', manualForm.nrp.trim());
+    formData.append('jabatan', manualForm.jabatan.trim());
+    formData.append('kesatuan', manualForm.kesatuan.trim());
+    formData.append('prioritas', prioritas_val);
+    formData.append('catatan', manualForm.catatan.trim());
+    formData.append('waktu_iso', new Date().toISOString());
+    formData.append('status', RequestStatus.MENUNGGU);
+    formData.append('alasan', 'Input Manual Admin');
+    formData.append('createdAt', Date.now().toString());
+
+    if (manualKtaFile) {
+      formData.append('dokumen_kta_file', manualKtaFile);
+    }
 
     try {
       const res = await fetch('/api/requests', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         credentials: 'include',
-        body: JSON.stringify(newReq)
+        body: formData
       });
-      if (!res.ok) throw new Error('Failed to create');
+      if (!res.ok) {
+        const errorData = await res.json().catch(() => ({}));
+        throw new Error(errorData.message || 'Failed to create');
+      }
+
+      const resData = await res.json().catch(() => ({}));
+
+      const newReq: ResetRequest = {
+        id: resData.id || reqId,
+        nama: manualForm.nama.trim(),
+        pangkat: manualForm.pangkat.trim(),
+        nrp: manualForm.nrp.trim(),
+        jabatan: manualForm.jabatan.trim(),
+        kesatuan: manualForm.kesatuan.trim(),
+        prioritas: prioritas_val,
+        catatan: manualForm.catatan.trim(),
+        dokumen_kta: resData.dokumen_kta || undefined,
+        waktu_iso: new Date().toISOString(),
+        status: RequestStatus.MENUNGGU,
+        alasan: 'Input Manual Admin',
+        createdAt: Date.now()
+      };
 
       setRequests(prev => [newReq, ...prev]);
       showToast(`Permintaan untuk ${manualForm.nama} berhasil ditambahkan secara manual`);
@@ -559,9 +613,10 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
         prioritas: 'Bukan Prioritas',
         catatan: ''
       });
-    } catch (error) {
+      handleRemoveKta();
+    } catch (error: any) {
       console.error('Manual submit failed:', error);
-      showToast('Gagal menyimpan data ke server', 'error');
+      showToast(error.message || 'Gagal menyimpan data ke server', 'error');
     } finally {
       setIsSubmittingManual(false);
     }
@@ -729,19 +784,19 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
           </div>
         </div>
         
-        <div className="flex flex-wrap items-center gap-3">
+        <div className="flex flex-wrap items-center gap-3 w-full lg:w-auto">
           {(isSuperAdmin || isUser) && (
-            <div className="flex items-center gap-3 mr-2">
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full sm:w-auto">
               <button 
                 onClick={() => setIsManualModalOpen(true)}
-                className="flex items-center gap-3 h-[46px] px-6 bg-blue-600 text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 hover:shadow-blue-900/40 hover:-translate-y-0.5 active:scale-[0.97]"
+                className="flex items-center justify-center gap-3 h-[46px] px-6 bg-blue-600 text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all shadow-lg shadow-blue-900/20 hover:shadow-blue-900/40 hover:-translate-y-0.5 active:scale-[0.97]"
               >
                 <span className="material-symbols-outlined text-xl">add_circle</span>
                 TAMBAH MANUAL
               </button>
               <button 
                 onClick={() => setIsImportModalOpen(true)}
-                className="flex items-center gap-3 h-[46px] px-6 bg-emerald-600 text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-900/20 hover:shadow-emerald-900/40 hover:-translate-y-0.5 active:scale-[0.97]"
+                className="flex items-center justify-center gap-3 h-[46px] px-6 bg-emerald-600 text-white rounded-xl text-[11px] font-black uppercase tracking-widest hover:bg-emerald-700 transition-all shadow-lg shadow-emerald-900/20 hover:shadow-emerald-900/40 hover:-translate-y-0.5 active:scale-[0.97]"
               >
                 <span className="material-symbols-outlined text-xl">upload_file</span>
                 IMPORT EXCEL
@@ -749,7 +804,7 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
             </div>
           )}
 
-          <div className={`flex items-center gap-2 p-1 rounded-2xl border ${isDarkMode ? 'bg-slate-900/50 border-slate-800' : 'bg-slate-100/50 border-slate-200'}`}>
+          <div className={`flex items-center justify-center gap-2 p-1 rounded-2xl border w-full sm:w-auto ${isDarkMode ? 'bg-slate-900/50 border-slate-800' : 'bg-slate-100/50 border-slate-200'}`}>
             <button 
               onClick={downloadTemplate}
               className={`flex items-center justify-center w-10 h-10 rounded-xl transition-all hover:scale-110 ${isDarkMode ? 'text-slate-400 hover:text-white hover:bg-slate-800' : 'text-slate-500 hover:text-slate-900 hover:bg-white'}`}
@@ -901,21 +956,21 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
 
       {/* Bulk Actions Bar */}
       {!isAdminPolres && selectedIds.length > 0 && (
-        <div className={`mb-6 p-5 rounded-[2rem] border flex flex-col md:flex-row items-center justify-between gap-4 animate-in slide-in-from-top-4 duration-500 shadow-xl ${isDarkMode ? 'bg-blue-600/10 border-blue-500/30 shadow-blue-900/20' : 'bg-blue-50 border-blue-100 shadow-blue-100/50'}`}>
-          <div className="flex items-center gap-5">
-            <div className={`w-14 h-14 rounded-2xl flex items-center justify-center shadow-lg transition-transform hover:scale-105 ${isDarkMode ? 'bg-blue-500 text-white shadow-blue-500/20' : 'bg-blue-600 text-white shadow-blue-600/20'}`}>
+        <div className={`mb-6 p-4 sm:p-5 rounded-[2rem] border flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4 animate-in slide-in-from-top-4 duration-500 shadow-xl ${isDarkMode ? 'bg-blue-600/10 border-blue-500/30 shadow-blue-900/20' : 'bg-blue-50 border-blue-100 shadow-blue-100/50'}`}>
+          <div className="flex items-center gap-4 sm:gap-5">
+            <div className={`w-12 h-12 sm:w-14 sm:h-14 rounded-2xl flex items-center justify-center shadow-lg transition-transform hover:scale-105 shrink-0 ${isDarkMode ? 'bg-blue-500 text-white shadow-blue-500/20' : 'bg-blue-600 text-white shadow-blue-600/20'}`}>
               <span className="material-symbols-outlined text-2xl">check_circle</span>
             </div>
-            <div>
-              <p className={`text-base font-black tracking-tight ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{selectedIds.length} Permintaan Terpilih</p>
+            <div className="min-w-0">
+              <p className={`text-sm sm:text-base font-black tracking-tight truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{selectedIds.length} Permintaan Terpilih</p>
               <p className="text-[10px] font-black text-blue-500 uppercase tracking-[0.2em] mt-0.5">Aksi Massal Tersedia</p>
             </div>
           </div>
-          <div className="flex items-center gap-3 w-full md:w-auto">
+          <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3 w-full md:w-auto">
             <button 
               onClick={handleBulkProcess}
               disabled={isBulkProcessing || isBulkDeleting}
-              className={`flex-1 md:flex-none px-8 py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all active:scale-95 shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2 ${isBulkProcessing ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`flex-1 sm:flex-none px-6 sm:px-8 py-3.5 sm:py-4 bg-blue-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-blue-700 transition-all active:scale-95 shadow-lg shadow-blue-900/20 flex items-center justify-center gap-2 ${isBulkProcessing ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               {isBulkProcessing ? (
                 <>
@@ -929,7 +984,7 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
             <button 
               onClick={handleBulkDelete}
               disabled={isBulkDeleting || isBulkProcessing}
-              className={`flex-1 md:flex-none px-8 py-4 bg-rose-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-700 transition-all active:scale-95 shadow-lg shadow-rose-900/20 flex items-center justify-center gap-2 ${isBulkDeleting ? 'opacity-70 cursor-not-allowed' : ''}`}
+              className={`flex-1 sm:flex-none px-6 sm:px-8 py-3.5 sm:py-4 bg-rose-600 text-white rounded-2xl text-[10px] font-black uppercase tracking-widest hover:bg-rose-700 transition-all active:scale-95 shadow-lg shadow-rose-900/20 flex items-center justify-center gap-2 ${isBulkDeleting ? 'opacity-70 cursor-not-allowed' : ''}`}
             >
               {isBulkDeleting ? (
                 <>
@@ -943,7 +998,7 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
             <button 
               onClick={() => setSelectedIds([])}
               disabled={isBulkProcessing || isBulkDeleting}
-              className={`flex-1 md:flex-none px-8 py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 ${isDarkMode ? 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white' : 'bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-900 border border-slate-200'} disabled:opacity-50 disabled:cursor-not-allowed`}
+              className={`flex-1 sm:flex-none px-6 sm:px-8 py-3.5 sm:py-4 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all active:scale-95 flex items-center justify-center ${isDarkMode ? 'bg-slate-800 text-slate-400 hover:bg-slate-700 hover:text-white' : 'bg-white text-slate-500 hover:bg-slate-100 hover:text-slate-900 border border-slate-200'} disabled:opacity-50 disabled:cursor-not-allowed`}
             >
               Batal
             </button>
@@ -1317,7 +1372,7 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
                   </select>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-4">
                   <div className="space-y-2">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Mulai</label>
                     <input 
@@ -1556,52 +1611,53 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
 
       {/* MODAL TOLAK (REJECT) */}
       {rejectingReq && (
-        <div className="fixed inset-0 z-[200] flex items-center justify-center p-6 bg-slate-900/70 backdrop-blur-xl animate-in fade-in duration-300">
-           <div className={`rounded-[3rem] w-full max-w-lg shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
-              <div className="p-10 border-b flex items-center justify-between">
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-3 sm:p-6 bg-slate-900/70 backdrop-blur-xl animate-in fade-in duration-300">
+           <div className={`rounded-3xl sm:rounded-[3rem] w-full max-w-lg max-h-[92vh] sm:max-h-[90vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+              <div className={`p-5 sm:p-8 md:p-10 border-b flex items-center justify-between shrink-0 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/30 border-slate-100'}`}>
                  <div>
-                    <h3 className={`text-2xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Tolak Permohonan</h3>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-3">PERSONEL: {rejectingReq.nama}</p>
+                    <h3 className={`text-xl sm:text-2xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Tolak Permohonan</h3>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-2 sm:mt-3 truncate max-w-[220px] sm:max-w-none">PERSONEL: {rejectingReq.nama}</p>
                  </div>
                  <button onClick={() => setRejectingReq(null)} className="p-3 rounded-full text-slate-400 hover:bg-rose-50 hover:text-rose-500 transition-all">
                     <span className="material-symbols-outlined">close</span>
                  </button>
               </div>
 
-              <div className="p-10 space-y-8">
-                 <div className="space-y-4">
+              <div className="p-5 sm:p-8 md:p-10 space-y-6 sm:space-y-8 overflow-y-auto flex-1">
+                 <div className="space-y-3 sm:space-y-4">
                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Alasan Penolakan</label>
                     <textarea 
-                      className={`w-full p-6 border rounded-3xl text-sm font-bold min-h-[150px] outline-none transition-all focus:ring-4 focus:ring-rose-500/10 ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-100 text-slate-700'}`}
+                      className={`w-full p-4 sm:p-6 border rounded-2xl sm:rounded-3xl text-sm font-bold min-h-[120px] sm:min-h-[150px] outline-none transition-all focus:ring-4 focus:ring-rose-500/10 ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white' : 'bg-slate-50 border-slate-100 text-slate-700'}`}
                       placeholder="Tuliskan alasan penolakan di sini..."
                       value={rejectionReason}
                       onChange={(e) => setRejectionReason(e.target.value)}
                     ></textarea>
                     <p className="text-[10px] text-slate-400 font-bold italic">Alasan ini akan dikirimkan ke email personel yang bersangkutan.</p>
                  </div>
+              </div>
 
-                 <div className="flex gap-4">
-                    <button 
-                      onClick={handleReject}
-                      disabled={isRejecting}
-                      className={`flex-1 py-5 bg-rose-600 text-white rounded-2xl text-[11px] font-black uppercase tracking-widest hover:bg-rose-700 transition-all shadow-xl shadow-rose-900/20 flex items-center justify-center gap-2 ${isRejecting ? 'opacity-70 cursor-not-allowed' : ''}`}
-                    >
-                      {isRejecting ? (
-                        <>
-                          <span className="material-symbols-outlined animate-spin text-sm">autorenew</span>
-                          Memproses...
-                        </>
-                      ) : (
-                        'Konfirmasi Tolak'
-                      )}
-                    </button>
-                    <button 
-                      onClick={() => setRejectingReq(null)}
-                      className={`flex-1 py-5 border rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
-                    >
-                      Batal
-                    </button>
-                 </div>
+              {/* Sticky Footer */}
+              <div className="p-4 sm:p-6 md:px-10 md:py-6 border-t border-slate-100 dark:border-slate-800 shrink-0 bg-slate-50/70 dark:bg-slate-900/90 flex flex-col-reverse sm:flex-row gap-3">
+                 <button 
+                   onClick={() => setRejectingReq(null)}
+                   className={`flex-1 py-3.5 sm:py-5 border rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all ${isDarkMode ? 'bg-slate-800 border-slate-700 text-slate-400 hover:bg-slate-700' : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'}`}
+                 >
+                   Batal
+                 </button>
+                 <button 
+                   onClick={handleReject}
+                   disabled={isRejecting}
+                   className={`flex-1 py-3.5 sm:py-5 bg-rose-600 text-white rounded-2xl text-[11px] font-black uppercase tracking-widest hover:bg-rose-700 transition-all shadow-xl shadow-rose-900/20 flex items-center justify-center gap-2 ${isRejecting ? 'opacity-70 cursor-not-allowed' : ''}`}
+                 >
+                   {isRejecting ? (
+                     <>
+                       <span className="material-symbols-outlined animate-spin text-sm">autorenew</span>
+                       Memproses...
+                     </>
+                   ) : (
+                     'Konfirmasi Tolak'
+                   )}
+                 </button>
               </div>
            </div>
         </div>
@@ -1609,22 +1665,22 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
 
       {/* MODAL DETAIL */}
       {viewingReq && (
-        <div className="fixed inset-0 z-[150] flex items-center justify-center p-6 bg-slate-900/70 backdrop-blur-xl animate-in fade-in duration-300">
-           <div className={`rounded-[3rem] w-full max-w-xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
-              <div className={`p-10 border-b flex items-center justify-between transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/30 border-slate-50'}`}>
+        <div className="fixed inset-0 z-[150] flex items-center justify-center p-3 sm:p-6 bg-slate-900/70 backdrop-blur-xl animate-in fade-in duration-300">
+           <div className={`rounded-3xl sm:rounded-[3rem] w-full max-w-xl max-h-[92vh] sm:max-h-[90vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+              <div className={`p-5 sm:p-8 md:p-10 border-b flex items-center justify-between shrink-0 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/30 border-slate-50'}`}>
                  <div>
-                    <h3 className={`text-2xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Rincian Permohonan</h3>
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-3">ID TIKET: {viewingReq.id}</p>
+                    <h3 className={`text-xl sm:text-2xl font-black leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>Rincian Permohonan</h3>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mt-2 sm:mt-3">ID TIKET: {viewingReq.id}</p>
                  </div>
                  <button onClick={() => setViewingReq(null)} className={`p-3 rounded-full transition-all ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-500'}`}>
                     <span className="material-symbols-outlined">close</span>
                  </button>
               </div>
 
-              <div className="p-10 space-y-10 overflow-y-auto max-h-[70vh]">
-                 <div className="grid grid-cols-2 gap-8">
+              <div className="p-5 sm:p-8 md:p-10 space-y-6 sm:space-y-8 md:space-y-10 overflow-y-auto flex-1">
+                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-8">
                     <div>
-                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Status Saat Ini</p>
+                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 sm:mb-2">Status Saat Ini</p>
                        <span className={`inline-flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest ${
                           viewingReq.status === RequestStatus.MENUNGGU ? (isDarkMode ? 'bg-amber-500/10 text-amber-400' : 'bg-amber-50 text-amber-600') :
                           viewingReq.status === RequestStatus.DIPROSES ? (isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600') : 
@@ -1635,52 +1691,52 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
                        </span>
                     </div>
                     <div>
-                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Waktu Pengajuan</p>
+                       <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1.5 sm:mb-2">Waktu Pengajuan</p>
                        <p className={`text-sm font-black ${isDarkMode ? 'text-slate-200' : 'text-slate-800'}`}>{new Date(viewingReq.createdAt).toLocaleString('id-ID')}</p>
                     </div>
                  </div>
 
-                 <div className="space-y-6">
-                    <div className={`p-6 rounded-[2rem] border flex items-center gap-6 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
-                       <div className={`w-16 h-16 rounded-[1.5rem] shadow-sm flex items-center justify-center border transition-colors duration-300 ${isDarkMode ? 'bg-slate-700 border-slate-600 text-slate-400' : 'bg-white border-slate-100 text-slate-400'}`}>
-                          <span className="material-symbols-outlined text-3xl">person</span>
+                 <div className="space-y-4 sm:space-y-6">
+                    <div className={`p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] border flex items-center gap-4 sm:gap-6 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
+                       <div className={`w-12 h-12 sm:w-16 sm:h-16 rounded-2xl sm:rounded-[1.5rem] shadow-sm flex items-center justify-center border shrink-0 transition-colors duration-300 ${isDarkMode ? 'bg-slate-700 border-slate-600 text-slate-400' : 'bg-white border-slate-100 text-slate-400'}`}>
+                          <span className="material-symbols-outlined text-2xl sm:text-3xl">person</span>
                        </div>
-                       <div>
+                       <div className="min-w-0">
                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Nama Lengkap</p>
-                          <h4 className={`text-xl font-black uppercase leading-none ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{viewingReq.nama}</h4>
-                          <p className="text-xs font-bold text-slate-500 mt-2">{viewingReq.pangkat} / {viewingReq.nrp}</p>
+                          <h4 className={`text-lg sm:text-xl font-black uppercase leading-tight truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{viewingReq.nama}</h4>
+                          <p className="text-xs font-bold text-slate-500 mt-1 truncate">{viewingReq.pangkat} / {viewingReq.nrp}</p>
                        </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-6">
-                       <div className={`p-5 border rounded-2xl transition-colors duration-300 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 sm:gap-6">
+                       <div className={`p-4 sm:p-5 border rounded-2xl transition-colors duration-300 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Jabatan</p>
-                          <p className={`text-xs font-black ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{viewingReq.jabatan}</p>
+                          <p className={`text-xs font-black break-words ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>{viewingReq.jabatan}</p>
                        </div>
-                       <div className={`p-5 border rounded-2xl transition-colors duration-300 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
+                       <div className={`p-4 sm:p-5 border rounded-2xl transition-colors duration-300 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-white border-slate-100'}`}>
                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-1">Kesatuan</p>
-                          <p className="text-xs font-black text-blue-600 uppercase">{viewingReq.kesatuan}</p>
+                          <p className="text-xs font-black text-blue-600 uppercase break-words">{viewingReq.kesatuan}</p>
                        </div>
                     </div>
 
-                    <div className={`p-6 rounded-2xl space-y-3 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'}`}>
+                    <div className={`p-4 sm:p-6 rounded-2xl space-y-2 sm:space-y-3 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'}`}>
                        <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Catatan / Alasan</p>
-                       <p className={`text-sm font-bold italic leading-relaxed ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>"{viewingReq.catatan || 'Tidak ada catatan tambahan yang dilampirkan.'}"</p>
+                       <p className={`text-sm font-bold italic leading-relaxed break-words ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>"{viewingReq.catatan || 'Tidak ada catatan tambahan yang dilampirkan.'}"</p>
                     </div>
 
                     {(viewingReq.status === RequestStatus.SELESAI || String(viewingReq.status).toUpperCase() === 'SELESAI') && (
-                       <div className={`p-6 rounded-2xl space-y-3 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'}`}>
+                       <div className={`p-4 sm:p-6 rounded-2xl space-y-3 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'}`}>
                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">PASSWORD BARU</p>
                           <div className="relative flex items-center justify-between">
                              <input 
                                 type="text" 
                                 readOnly 
-                                className={`bg-transparent border-none p-0 text-sm font-bold outline-none flex-1 ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
+                                className={`bg-transparent border-none p-0 text-sm font-bold outline-none flex-1 truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}
                                  value={showDetailPassword 
                                     ? (viewingReq.reset_password || '') 
                                     : '••••••••'}
                              />
-                             <div className="flex items-center gap-2 ml-4">
+                             <div className="flex items-center gap-2 ml-4 shrink-0">
                                 <button 
                                    type="button"
                                    onClick={() => setShowDetailPassword(!showDetailPassword)}
@@ -1703,7 +1759,7 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
                     )}
 
                     {viewingReq.dokumen_kta && (
-                      <div className={`p-6 rounded-2xl space-y-3 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'}`}>
+                      <div className={`p-4 sm:p-6 rounded-2xl space-y-3 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800' : 'bg-slate-50'}`}>
                         <div className="flex items-center justify-between">
                           <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Dokumen KTA</p>
                           <a 
@@ -1716,11 +1772,11 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
                             Download Full
                           </a>
                         </div>
-                        <div className="rounded-xl overflow-hidden border border-slate-700 bg-slate-900 flex items-center justify-center min-h-[200px]">
+                        <div className="rounded-xl overflow-hidden border border-slate-700 bg-slate-900 flex items-center justify-center min-h-[160px] sm:min-h-[200px]">
                           <img 
                             src={`/api/download/kta/${viewingReq.dokumen_kta}`} 
                             alt="KTA" 
-                            className="max-w-full h-auto" 
+                            className="max-w-full h-auto max-h-[300px] object-contain" 
                             onError={(e) => {
                               // Fallback if not found or not a filename
                               if (!viewingReq.dokumen_kta?.startsWith('data:')) {
@@ -1734,8 +1790,9 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
                  </div>
               </div>
 
-              <div className="p-10 pt-0">
-                 <button onClick={() => setViewingReq(null)} className={`w-full py-5 rounded-[2rem] font-black text-xs uppercase tracking-widest transition-all shadow-xl ${isDarkMode ? 'bg-white text-slate-900 hover:bg-slate-200 shadow-white/5' : 'bg-slate-900 text-white hover:bg-slate-800 shadow-slate-200'}`}>
+              {/* Sticky Footer */}
+              <div className="p-4 sm:p-6 md:p-8 border-t border-slate-100 dark:border-slate-800 shrink-0 bg-slate-50/70 dark:bg-slate-900/90">
+                 <button onClick={() => setViewingReq(null)} className={`w-full py-4 sm:py-5 rounded-2xl sm:rounded-[2rem] font-black text-xs uppercase tracking-widest transition-all shadow-xl ${isDarkMode ? 'bg-white text-slate-900 hover:bg-slate-200 shadow-white/5' : 'bg-slate-900 text-white hover:bg-slate-800 shadow-slate-200'}`}>
                     Tutup Detail
                  </button>
               </div>
@@ -1745,143 +1802,240 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
 
       {/* MODAL INPUT MANUAL (KHUSUS ADMIN) */}
       {isManualModalOpen && (
-        <div className="fixed inset-0 z-[160] flex items-center justify-center p-6 bg-slate-900/70 backdrop-blur-xl animate-in fade-in duration-300">
-          <div className={`rounded-[3rem] w-full max-w-xl shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
-            <div className={`p-10 border-b flex items-center justify-between transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/30 border-slate-100'}`}>
-              <div className="flex items-center gap-4">
-                 <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600'}`}>
-                    <span className="material-symbols-outlined text-3xl">person_add</span>
+        <div className="fixed inset-0 z-[160] flex items-center justify-center p-3 sm:p-6 bg-slate-900/70 backdrop-blur-xl animate-in fade-in duration-300">
+          <div className={`rounded-3xl sm:rounded-[3rem] w-full max-w-xl max-h-[92vh] sm:max-h-[90vh] shadow-2xl flex flex-col overflow-hidden animate-in zoom-in-95 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            <div className={`p-5 sm:p-8 md:p-10 border-b flex items-center justify-between shrink-0 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/30 border-slate-100'}`}>
+              <div className="flex items-center gap-3 sm:gap-4">
+                 <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 ${isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600'}`}>
+                    <span className="material-symbols-outlined text-2xl sm:text-3xl">person_add</span>
                  </div>
                  <div>
-                    <h3 className={`font-black text-xl uppercase tracking-tight leading-none ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Input Pengajuan Manual</h3>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-2">Buat tiket reset password baru</p>
+                    <h3 className={`font-black text-lg sm:text-xl uppercase tracking-tight leading-none ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Input Pengajuan Manual</h3>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1.5 sm:mt-2">Buat tiket reset password baru</p>
                  </div>
               </div>
-              <button onClick={() => setIsManualModalOpen(false)} className={`p-3 rounded-full transition-all ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-500'}`}>
+              <button onClick={() => { setIsManualModalOpen(false); handleRemoveKta(); }} className={`p-2.5 sm:p-3 rounded-full transition-all ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-500'}`}>
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
             
-            <form onSubmit={handleManualSubmit} className="p-10 space-y-8 overflow-y-auto max-h-[calc(100vh-250px)] scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700">
-               <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nama Personel</label>
-                    <input 
-                      type="text" 
-                      className={`w-full px-6 py-4 border rounded-2xl text-sm font-bold transition-all outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} 
-                      placeholder="Nama Lengkap"
-                      value={manualForm.nama}
-                      onChange={(e) => setManualForm({...manualForm, nama: e.target.value})}
-                      required
-                    />
+            <form onSubmit={handleManualSubmit} className="flex flex-col flex-1 min-h-0 overflow-hidden">
+               <div className="p-5 sm:p-8 md:p-10 space-y-5 sm:space-y-6 md:space-y-8 overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                     <div className="space-y-2">
+                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Nama Personel</label>
+                       <input 
+                         type="text" 
+                         className={`w-full px-4 py-3 sm:px-6 sm:py-4 border rounded-2xl text-sm font-bold transition-all outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} 
+                         placeholder="Nama Lengkap"
+                         value={manualForm.nama}
+                         onChange={(e) => setManualForm({...manualForm, nama: e.target.value})}
+                         required
+                       />
+                     </div>
+                     <div className="space-y-2">
+                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">NRP / NIP</label>
+                       <input 
+                         type="text" 
+                         className={`w-full px-4 py-3 sm:px-6 sm:py-4 border rounded-2xl text-sm font-bold transition-all outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} 
+                         placeholder="8 Digit NRP"
+                         value={manualForm.nrp}
+                         onChange={(e) => setManualForm({...manualForm, nrp: e.target.value})}
+                         onBlur={async () => {
+                           const existingNama = await validateNRP(manualForm.nrp, manualForm.nama);
+                           if (existingNama) {
+                             setNrpConflict({ nrp: manualForm.nrp, existingNama });
+                           }
+                         }}
+                         required
+                       />
+                     </div>
                   </div>
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">NRP / NIP</label>
-                    <input 
-                      type="text" 
-                      className={`w-full px-6 py-4 border rounded-2xl text-sm font-bold transition-all outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} 
-                      placeholder="8 Digit NRP"
-                      value={manualForm.nrp}
-                      onChange={(e) => setManualForm({...manualForm, nrp: e.target.value})}
-                      onBlur={async () => {
-                        const existingNama = await validateNRP(manualForm.nrp, manualForm.nama);
-                        if (existingNama) {
-                          setNrpConflict({ nrp: manualForm.nrp, existingNama });
-                        }
-                      }}
-                      required
-                    />
-                  </div>
-               </div>
-               {nrpConflict && (
-                 <div className={`p-4 rounded-2xl border flex items-start gap-4 animate-in slide-in-from-top-2 duration-300 ${isDarkMode ? 'bg-rose-500/10 border-rose-500/30' : 'bg-rose-50 border-rose-100'}`}>
-                    <span className="material-symbols-outlined text-rose-500 mt-0.5">warning</span>
-                    <div className="flex-1">
-                       <p className={`text-xs font-black uppercase tracking-tight ${isDarkMode ? 'text-rose-400' : 'text-rose-600'}`}>Konflik Data Personel</p>
-                       <p className={`text-[10px] font-bold mt-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
-                          NRP <span className="font-black text-rose-500">{nrpConflict.nrp}</span> sudah terdaftar atas nama <span className="font-black text-rose-500">{nrpConflict.existingNama}</span>. Silakan periksa kembali kesesuaian data.
-                       </p>
-                       <button 
-                         type="button"
-                         onClick={() => setNrpConflict(null)}
-                         className="mt-3 text-[9px] font-black uppercase tracking-widest text-rose-500 hover:underline"
-                       >
-                         Saya Mengerti
-                       </button>
+                  {nrpConflict && (
+                    <div className={`p-4 rounded-2xl border flex items-start gap-4 animate-in slide-in-from-top-2 duration-300 ${isDarkMode ? 'bg-rose-500/10 border-rose-500/30' : 'bg-rose-50 border-rose-100'}`}>
+                       <span className="material-symbols-outlined text-rose-500 mt-0.5">warning</span>
+                       <div className="flex-1">
+                          <p className={`text-xs font-black uppercase tracking-tight ${isDarkMode ? 'text-rose-400' : 'text-rose-600'}`}>Konflik Data Personel</p>
+                          <p className={`text-[10px] font-bold mt-1 ${isDarkMode ? 'text-slate-400' : 'text-slate-600'}`}>
+                             NRP <span className="font-black text-rose-500">{nrpConflict.nrp}</span> sudah terdaftar atas nama <span className="font-black text-rose-500">{nrpConflict.existingNama}</span>. Silakan periksa kembali kesesuaian data.
+                          </p>
+                          <button 
+                            type="button"
+                            onClick={() => setNrpConflict(null)}
+                            className="mt-3 text-[9px] font-black uppercase tracking-widest text-rose-500 hover:underline"
+                          >
+                            Saya Mengerti
+                          </button>
+                       </div>
                     </div>
-                 </div>
-               )}
-               <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Pangkat</label>
-                    <input 
-                      type="text" 
-                      className={`w-full px-6 py-4 border rounded-2xl text-sm font-bold transition-all outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} 
-                      placeholder="Contoh: Briptu"
-                      value={manualForm.pangkat}
-                      onChange={(e) => setManualForm({...manualForm, pangkat: e.target.value})}
-                    />
+                  )}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 sm:gap-6">
+                     <div className="space-y-2">
+                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Pangkat</label>
+                       <input 
+                         type="text" 
+                         className={`w-full px-4 py-3 sm:px-6 sm:py-4 border rounded-2xl text-sm font-bold transition-all outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} 
+                         placeholder="Contoh: Briptu"
+                         value={manualForm.pangkat}
+                         onChange={(e) => setManualForm({...manualForm, pangkat: e.target.value})}
+                       />
+                     </div>
+                     <div className="space-y-2">
+                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Jabatan</label>
+                       <input 
+                         type="text" 
+                         className={`w-full px-4 py-3 sm:px-6 sm:py-4 border rounded-2xl text-sm font-bold transition-all outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} 
+                         placeholder="Unit Kerja"
+                         value={manualForm.jabatan}
+                         onChange={(e) => setManualForm({...manualForm, jabatan: e.target.value})}
+                       />
+                     </div>
                   </div>
                   <div className="space-y-2">
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Jabatan</label>
-                    <input 
-                      type="text" 
-                      className={`w-full px-6 py-4 border rounded-2xl text-sm font-bold transition-all outline-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white'}`} 
-                      placeholder="Unit Kerja"
-                      value={manualForm.jabatan}
-                      onChange={(e) => setManualForm({...manualForm, jabatan: e.target.value})}
-                    />
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Kesatuan</label>
+                     <input 
+                       type="text" 
+                       className={`w-full px-4 py-3 sm:px-6 sm:py-4 border rounded-2xl text-sm font-black transition-all outline-none ${
+                         !isSuperAdmin 
+                           ? (isDarkMode ? 'bg-slate-800/50 border-slate-800 text-slate-500' : 'bg-slate-100 border-slate-100 text-slate-500') 
+                           : (isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white')
+                       }`}
+                       value={manualForm.kesatuan}
+                       onChange={(e) => isSuperAdmin && setManualForm({...manualForm, kesatuan: e.target.value})}
+                       readOnly={!isSuperAdmin}
+                       required
+                     />
+                     {!isSuperAdmin && <p className="text-[9px] font-bold text-blue-500 uppercase mt-2 italic px-1">* Terkunci: Hanya untuk unit {currentUser.kesatuan}</p>}
+                  </div>
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Prioritas</label>
+                     <select
+                       className={`w-full px-4 py-3 sm:px-6 sm:py-4 border rounded-2xl text-sm font-bold transition-all outline-none appearance-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:border-blue-500' : 'bg-white border-slate-200 focus:border-blue-500'}`}
+                       value={manualForm.prioritas}
+                       onChange={(e) => setManualForm({...manualForm, prioritas: e.target.value})}
+                       required
+                     >
+                       <option value="Bukan Prioritas">Bukan Prioritas</option>
+                       <option value="Prioritas Mendesak">Prioritas Mendesak</option>
+                     </select>
+                  </div>
+                  {/* Kolom Upload KTA (Opsional) */}
+                  <div className="space-y-2">
+                     <div className="flex items-center justify-between ml-1">
+                       <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-1.5">
+                         <span className="material-symbols-outlined text-sm text-blue-500">badge</span>
+                         Lampiran Dokumen KTA
+                       </label>
+                       <span className="text-[9px] font-bold text-slate-400 dark:text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-full uppercase tracking-wider">
+                         Opsional
+                       </span>
+                     </div>
+
+                     <input 
+                       ref={manualKtaInputRef}
+                       type="file" 
+                       accept="image/jpeg,image/png,application/pdf"
+                       onChange={handleKtaChange}
+                       className="hidden" 
+                       id="manual-kta-file-input"
+                     />
+
+                     {!manualKtaFile ? (
+                       <label 
+                         htmlFor="manual-kta-file-input"
+                         className={`w-full p-4 border-2 border-dashed rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-3 cursor-pointer transition-all ${
+                           isDarkMode 
+                             ? 'border-slate-700 hover:border-blue-500 bg-slate-800/40 hover:bg-slate-800' 
+                             : 'border-slate-200 hover:border-blue-400 bg-slate-50/50 hover:bg-blue-50/30'
+                         }`}
+                       >
+                         <div className="flex items-center gap-3">
+                           <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+                             isDarkMode ? 'bg-slate-700 text-slate-300' : 'bg-slate-100 text-slate-500'
+                           }`}>
+                             <span className="material-symbols-outlined text-xl">upload_file</span>
+                           </div>
+                           <div className="text-left">
+                             <p className={`text-xs font-bold ${isDarkMode ? 'text-slate-300' : 'text-slate-700'}`}>
+                               Pilih Foto KTA atau Dokumen PDF
+                             </p>
+                             <p className="text-[10px] text-slate-400 font-medium">
+                               Format JPG, PNG, atau PDF (Maks. 2MB)
+                             </p>
+                           </div>
+                         </div>
+                         <span className={`px-4 py-2 rounded-xl text-xs font-bold shrink-0 transition-all ${
+                           isDarkMode ? 'bg-slate-700 text-white' : 'bg-white text-slate-700 border shadow-xs'
+                         }`}>
+                           Pilih File
+                         </span>
+                       </label>
+                     ) : (
+                       <div className={`p-4 rounded-2xl border flex items-center justify-between gap-3 transition-all ${
+                         isDarkMode ? 'bg-slate-800/90 border-blue-500/30' : 'bg-blue-50/50 border-blue-200'
+                       }`}>
+                         <div className="flex items-center gap-3 min-w-0">
+                           {manualKtaPreview ? (
+                             <img 
+                               src={manualKtaPreview} 
+                               alt="Preview KTA" 
+                               className="w-12 h-12 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0" 
+                             />
+                           ) : (
+                             <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 ${
+                               isDarkMode ? 'bg-blue-500/20 text-blue-400' : 'bg-blue-100 text-blue-600'
+                             }`}>
+                               <span className="material-symbols-outlined text-2xl">
+                                 {manualKtaFile.type === 'application/pdf' ? 'picture_as_pdf' : 'description'}
+                               </span>
+                             </div>
+                           )}
+                           <div className="min-w-0">
+                             <p className={`text-xs font-bold truncate ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>
+                               {manualKtaFile.name}
+                             </p>
+                             <p className="text-[10px] text-slate-400 font-medium">
+                               {(manualKtaFile.size / (1024 * 1024)).toFixed(2)} MB • Siap diunggah
+                             </p>
+                           </div>
+                         </div>
+                         <button 
+                           type="button" 
+                           onClick={handleRemoveKta}
+                           title="Hapus file KTA"
+                           className={`p-2 rounded-xl transition-all ${
+                             isDarkMode ? 'text-slate-400 hover:text-rose-400 hover:bg-rose-500/10' : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+                           }`}
+                         >
+                           <span className="material-symbols-outlined text-xl">delete</span>
+                         </button>
+                       </div>
+                     )}
+                  </div>
+                  <div className="space-y-2">
+                     <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Keterangan / Catatan</label>
+                     <textarea 
+                       className={`w-full px-4 py-3 sm:px-6 sm:py-4 border rounded-2xl text-sm font-bold h-28 sm:h-32 resize-none outline-none transition-all ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:border-blue-500' : 'bg-white border-slate-200 focus:border-blue-500'}`}
+                       placeholder="Contoh: Permohonan langsung di loket..."
+                       value={manualForm.catatan}
+                       onChange={(e) => setManualForm({...manualForm, catatan: e.target.value})}
+                     />
                   </div>
                </div>
-               <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Kesatuan</label>
-                  <input 
-                    type="text" 
-                    className={`w-full px-6 py-4 border rounded-2xl text-sm font-black transition-all outline-none ${
-                      !isSuperAdmin 
-                        ? (isDarkMode ? 'bg-slate-800/50 border-slate-800 text-slate-500' : 'bg-slate-100 border-slate-100 text-slate-500') 
-                        : (isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:bg-slate-700' : 'bg-slate-50 border-slate-200 focus:bg-white')
-                    }`}
-                    value={manualForm.kesatuan}
-                    onChange={(e) => isSuperAdmin && setManualForm({...manualForm, kesatuan: e.target.value})}
-                    readOnly={!isSuperAdmin}
-                    required
-                  />
-                  {!isSuperAdmin && <p className="text-[9px] font-bold text-blue-500 uppercase mt-2 italic px-1">* Terkunci: Hanya untuk unit {currentUser.kesatuan}</p>}
-               </div>
-               <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Prioritas</label>
-                  <select
-                    className={`w-full px-6 py-4 border rounded-2xl text-sm font-bold transition-all outline-none appearance-none ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:border-blue-500' : 'bg-white border-slate-200 focus:border-blue-500'}`}
-                    value={manualForm.prioritas}
-                    onChange={(e) => setManualForm({...manualForm, prioritas: e.target.value})}
-                    required
-                  >
-                    <option value="Bukan Prioritas">Bukan Prioritas</option>
-                    <option value="Prioritas Mendesak">Prioritas Mendesak</option>
-                  </select>
-               </div>
-               <div className="space-y-2">
-                  <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Keterangan / Catatan</label>
-                  <textarea 
-                    className={`w-full px-6 py-4 border rounded-2xl text-sm font-bold h-32 resize-none outline-none transition-all ${isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:border-blue-500' : 'bg-white border-slate-200 focus:border-blue-500'}`}
-                    placeholder="Contoh: Permohonan langsung di loket..."
-                    value={manualForm.catatan}
-                    onChange={(e) => setManualForm({...manualForm, catatan: e.target.value})}
-                  />
-               </div>
-               <div className="pt-8 flex items-center justify-end gap-4 border-t border-slate-100 dark:border-slate-800">
+
+               {/* STICKY FOOTER ACTION: Selalu terlihat di bagian bawah modal tanpa terpotong */}
+               <div className="p-4 sm:p-6 md:px-10 md:py-6 border-t border-slate-100 dark:border-slate-800 shrink-0 bg-slate-50/70 dark:bg-slate-900/90 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-3 sm:gap-4">
                   <button 
                     type="button" 
-                    onClick={() => setIsManualModalOpen(false)}
-                    className={`px-8 py-4 rounded-2xl font-black transition-all text-xs uppercase tracking-widest ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`}
+                    onClick={() => { setIsManualModalOpen(false); handleRemoveKta(); }}
+                    className={`px-6 sm:px-8 py-3.5 sm:py-4 rounded-2xl font-black transition-all text-xs uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`}
                   >
                     Batal
                   </button>
                   <button 
                     type="submit"
                     disabled={isSubmittingManual}
-                    className={`px-10 py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-700 shadow-2xl shadow-blue-200/20 transition-all active:scale-95 flex items-center gap-2 ${isSubmittingManual ? 'opacity-70 cursor-not-allowed' : ''}`}
+                    className={`px-8 sm:px-10 py-3.5 sm:py-4 bg-blue-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-blue-700 shadow-2xl shadow-blue-200/20 transition-all active:scale-95 flex items-center justify-center gap-2 ${isSubmittingManual ? 'opacity-70 cursor-not-allowed' : ''}`}
                   >
                     {isSubmittingManual ? (
                       <>
@@ -1899,27 +2053,27 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
       )}
 
       {selectedReq && isSuperAdmin && (
-        <div className="fixed inset-0 z-[170] flex items-center justify-center p-6 bg-slate-900/70 backdrop-blur-xl animate-in fade-in duration-300">
-          <div className={`rounded-[3rem] w-full max-w-md overflow-hidden shadow-2xl animate-in zoom-in-95 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
-            <div className={`p-10 border-b flex items-center justify-between transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/30 border-slate-50'}`}>
-              <div className="flex items-center gap-4">
-                 <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600'}`}>
-                    <span className="material-symbols-outlined text-3xl">key</span>
+        <div className="fixed inset-0 z-[170] flex items-center justify-center p-3 sm:p-6 bg-slate-900/70 backdrop-blur-xl animate-in fade-in duration-300">
+          <div className={`rounded-3xl sm:rounded-[3rem] w-full max-w-md max-h-[92vh] sm:max-h-[90vh] overflow-hidden shadow-2xl flex flex-col animate-in zoom-in-95 transition-colors duration-300 ${isDarkMode ? 'bg-slate-900 border border-slate-800' : 'bg-white'}`}>
+            <div className={`p-5 sm:p-8 md:p-10 border-b flex items-center justify-between shrink-0 transition-colors duration-300 ${isDarkMode ? 'bg-slate-800/50 border-slate-800' : 'bg-slate-50/30 border-slate-50'}`}>
+              <div className="flex items-center gap-3 sm:gap-4">
+                 <div className={`w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0 ${isDarkMode ? 'bg-blue-500/10 text-blue-400' : 'bg-blue-50 text-blue-600'}`}>
+                    <span className="material-symbols-outlined text-2xl sm:text-3xl">key</span>
                  </div>
                  <div>
-                    <h3 className={`font-black text-xl uppercase tracking-tight leading-none ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Eksekusi Reset</h3>
-                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-2">Update password personel</p>
+                    <h3 className={`font-black text-lg sm:text-xl uppercase tracking-tight leading-none ${isDarkMode ? 'text-white' : 'text-slate-800'}`}>Eksekusi Reset</h3>
+                    <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest mt-1.5 sm:mt-2">Update password personel</p>
                  </div>
               </div>
-              <button onClick={() => { setSelectedReq(null); setShowWeakWarning(false); }} className={`p-3 rounded-full transition-all ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-500'}`}>
+              <button onClick={() => { setSelectedReq(null); setShowWeakWarning(false); }} className={`p-2.5 sm:p-3 rounded-full transition-all ${isDarkMode ? 'text-slate-400 hover:bg-slate-800 hover:text-white' : 'text-slate-400 hover:bg-rose-50 hover:text-rose-500'}`}>
                 <span className="material-symbols-outlined">close</span>
               </button>
             </div>
-            <div className="p-10 space-y-8 overflow-y-auto max-h-[calc(100vh-200px)] scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700">
-              <div className={`p-6 rounded-[2rem] border space-y-2 text-center transition-colors duration-300 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
+            <div className="p-5 sm:p-8 md:p-10 space-y-6 sm:space-y-8 overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-slate-300 dark:scrollbar-thumb-slate-700">
+              <div className={`p-4 sm:p-6 rounded-2xl sm:rounded-[2rem] border space-y-1.5 sm:space-y-2 text-center transition-colors duration-300 ${isDarkMode ? 'bg-slate-800 border-slate-700' : 'bg-slate-50 border-slate-100'}`}>
                 <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Target Personel</div>
-                <div className={`text-lg font-black uppercase ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{selectedReq.nama}</div>
-                <div className="text-xs font-bold text-slate-400 uppercase tracking-widest">{selectedReq.nrp} — {selectedReq.kesatuan}</div>
+                <div className={`text-base sm:text-lg font-black uppercase truncate ${isDarkMode ? 'text-white' : 'text-slate-900'}`}>{selectedReq.nama}</div>
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-widest truncate">{selectedReq.nrp} — {selectedReq.kesatuan}</div>
               </div>
               
               <div className="space-y-4">
@@ -1928,7 +2082,7 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
                   <div className="relative">
                     <input 
                       type="text" 
-                      className={`w-full px-8 py-5 border-2 rounded-3xl font-black placeholder:text-slate-200 focus:outline-none transition-all text-center text-xl tracking-widest ${
+                      className={`w-full px-4 py-3 sm:px-8 sm:py-5 border-2 rounded-2xl sm:rounded-3xl font-black placeholder:text-slate-200 focus:outline-none transition-all text-center text-base sm:text-xl tracking-widest ${
                         showWeakWarning 
                           ? 'border-amber-400' 
                           : (isDarkMode ? 'bg-slate-800 border-slate-700 text-white focus:border-blue-500' : 'bg-white border-slate-100 text-slate-800 focus:border-blue-500')
@@ -1972,7 +2126,7 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
 
                 {/* WARNING PASSWORD LEMAH */}
                 {showWeakWarning && (
-                  <div className={`p-5 border rounded-2xl animate-in fade-in zoom-in-95 ${isDarkMode ? 'bg-amber-900/20 border-amber-900/50' : 'bg-amber-50 border-amber-200'}`}>
+                  <div className={`p-4 sm:p-5 border rounded-2xl animate-in fade-in zoom-in-95 ${isDarkMode ? 'bg-amber-900/20 border-amber-900/50' : 'bg-amber-50 border-amber-200'}`}>
                     <div className="flex items-start gap-3">
                       <span className="material-symbols-outlined text-amber-500 text-xl">warning</span>
                       <div>
@@ -1999,34 +2153,34 @@ const ResetRequests: React.FC<ResetRequestsProps> = ({
                   </div>
                 )}
               </div>
+            </div>
 
-              <div className="pt-8 flex items-center justify-end gap-4 border-t border-slate-100 dark:border-slate-800">
+            {/* STICKY FOOTER ACTION: Selalu terlihat di bawah tanpa terpotong */}
+            <div className="p-4 sm:p-6 md:px-10 md:py-6 border-t border-slate-100 dark:border-slate-800 shrink-0 bg-slate-50/70 dark:bg-slate-900/90 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-3 sm:gap-4">
+              <button 
+                onClick={() => { setSelectedReq(null); setShowWeakWarning(false); }}
+                className={`px-6 sm:px-8 py-3.5 sm:py-4 rounded-2xl font-black transition-all text-xs uppercase tracking-widest text-center ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`}
+              >
+                Batal
+              </button>
+              {!showWeakWarning && (
                 <button 
-                  onClick={() => { setSelectedReq(null); setShowWeakWarning(false); }}
-                  className={`px-8 py-4 rounded-2xl font-black transition-all text-xs uppercase tracking-widest ${isDarkMode ? 'text-slate-400 hover:bg-slate-800' : 'text-slate-500 hover:bg-slate-100'}`}
+                  onClick={() => executeReset(false)}
+                  disabled={isExecutingReset || !newPassword.trim()}
+                  className={`px-8 sm:px-10 py-3.5 sm:py-4 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-emerald-700 shadow-2xl shadow-emerald-200/20 transition-all active:scale-95 flex items-center justify-center gap-2 ${
+                    isExecutingReset || !newPassword.trim() ? 'opacity-70 cursor-not-allowed' : ''
+                  }`}
                 >
-                  Batal
+                  {isExecutingReset ? (
+                    <>
+                      <span className="material-symbols-outlined animate-spin text-sm">autorenew</span>
+                      Memproses...
+                    </>
+                  ) : (
+                    'Simpan & Eksekusi'
+                  )}
                 </button>
-                {!showWeakWarning && (
-                  <button 
-                    onClick={() => executeReset(false)}
-                    disabled={isExecutingReset}
-                    className={`px-10 py-4 bg-emerald-600 text-white rounded-2xl font-black text-xs uppercase tracking-widest hover:bg-emerald-700 shadow-2xl shadow-emerald-200/20 transition-all active:scale-95 flex items-center gap-2 ${isExecutingReset ? 'opacity-70 cursor-not-allowed' : ''}`}
-                  >
-                    {isExecutingReset ? (
-                      <>
-                        <span className="material-symbols-outlined animate-spin text-xl">autorenew</span>
-                        Memproses...
-                      </>
-                    ) : (
-                      <>
-                        <span className="material-symbols-outlined text-xl">send</span>
-                        Selesaikan Reset
-                      </>
-                    )}
-                  </button>
-                )}
-              </div>
+              )}
             </div>
           </div>
         </div>
